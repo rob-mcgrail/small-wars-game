@@ -60,7 +60,13 @@ func get_time_string() -> String:
 	var total := int(game_time_minutes)
 	var hours := (total / 60) % 24
 	var minutes := total % 60
-	return "%02d:%02d" % [hours, minutes]
+	var ampm := "AM"
+	if hours >= 12:
+		ampm = "PM"
+	var display_hours := hours % 12
+	if display_hours == 0:
+		display_hours = 12
+	return "%d:%02d %s" % [display_hours, minutes, ampm]
 
 
 func get_phase_string() -> String:

@@ -258,27 +258,44 @@ func set_orders_phase(is_orders: bool) -> void:
 	_is_orders_phase = is_orders
 
 
-func show_unit(unit: Dictionary, utype: Dictionary, order: Order = null, game_time: float = 0.0) -> void:
+func show_unit(unit: Dictionary, utype: Dictionary, order: Order = null, game_time: float = 0.0, suppression_val: float = 0.0) -> void:
 	_current_unit_name = unit.get("name", "")
 	name_label.text = unit.get("name", "?")
 	type_label.text = utype.get("description", utype.get("name", "?"))
 	speed_label.text = "Speed:  %d km/h" % utype.get("speed_kmh", 0)
 
-	crew_label.text = "Crew:     %d" % utype.get("crew", 0)
+	var max_crew: int = int(utype.get("crew", 0))
+	var cur_crew: int = int(unit.get("current_crew", max_crew))
+	crew_label.text = "Crew:     %d/%d" % [cur_crew, max_crew]
+	if cur_crew < max_crew:
+		crew_label.add_theme_color_override("font_color", Color(0.9, 0.4, 0.2))
+	else:
+		crew_label.add_theme_color_override("font_color", Color(0.82, 0.84, 0.78))
 	training_label.text = "Training: %s" % str(utype.get("training", "?"))
 
 	# Show current morale (from unit dict) with color coding
 	var current_morale: int = int(unit.get("current_morale", utype.get("morale", 0)))
-	var base_morale: int = int(utype.get("morale", 0))
-	morale_label.text = "Morale:   %d/%d" % [current_morale, base_morale]
-	if current_morale > 5:
+	morale_label.text = "Morale:   %d%%" % current_morale
+	if current_morale > 50:
 		morale_label.add_theme_color_override("font_color", Color(0.3, 0.85, 0.3))
-	elif current_morale >= 3:
+	elif current_morale >= 30:
 		morale_label.add_theme_color_override("font_color", Color(0.85, 0.85, 0.2))
 	else:
 		morale_label.add_theme_color_override("font_color", Color(0.9, 0.25, 0.2))
 
-	# Show unit status if broken/routing
+	# Suppression
+	if suppression_val > 0.0:
+		var supp_text := "Suppression: %d%%" % int(suppression_val)
+		status_label.text = supp_text  # temporarily reuse, will be overridden below if needed
+		if suppression_val > 60:
+			status_label.add_theme_color_override("font_color", Color(0.9, 0.2, 0.1))
+		elif suppression_val > 30:
+			status_label.add_theme_color_override("font_color", Color(0.9, 0.6, 0.2))
+		else:
+			status_label.add_theme_color_override("font_color", Color(0.85, 0.85, 0.3))
+		status_label.visible = true
+
+	# Show unit status if broken/routing (overrides suppression display)
 	var unit_status: String = unit.get("unit_status", "")
 	if unit_status == "BROKEN":
 		status_label.text = "** BROKEN - WITHDRAWING **"
@@ -288,9 +305,20 @@ func show_unit(unit: Dictionary, utype: Dictionary, order: Order = null, game_ti
 		status_label.text = "** ROUTING **"
 		status_label.add_theme_color_override("font_color", Color(0.95, 0.15, 0.1))
 		status_label.visible = true
+	elif unit_status == "DESTROYED":
+		status_label.text = "** DESTROYED **"
+		status_label.add_theme_color_override("font_color", Color(0.5, 0.1, 0.1))
+		status_label.visible = true
 	else:
-		status_label.text = ""
-		status_label.visible = false
+		var vdmg: float = float(unit.get("vehicle_damage", 0.0))
+		if vdmg > 0.0:
+			var dmg_pct: int = int(vdmg * 100)
+			status_label.text = "Vehicle damage: %d%%" % dmg_pct
+			status_label.add_theme_color_override("font_color", Color(0.9, 0.5, 0.2))
+			status_label.visible = true
+		else:
+			status_label.text = ""
+			status_label.visible = false
 
 	var armor_val: int = utype.get("armor", 0)
 	var armor_desc := "none"

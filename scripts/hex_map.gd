@@ -51,15 +51,15 @@ const ZOOM_STEP := 0.15
 const EDGE_SCROLL_MARGIN := 20.0
 const EDGE_SCROLL_SPEED := 300.0
 
-# Ammo burn rates: rounds consumed per weapon per game-minute
-# Keyed by ROE name.  Hold Fire is always 0.
-const AMMO_BURN_FIRE_AT_WILL: float = 15.0    # continuous suppressive fire
-const AMMO_BURN_RETURN_FIRE: float = 5.0       # reactive bursts
-const AMMO_BURN_HALT_AND_ENGAGE: float = 20.0  # heavy focused fire (only when stopped)
+# ROE multipliers on weapon's rate_of_fire
+# e.g. a 600 RPM weapon on Fire at Will fires at 10% = 60 RPM
+const ROE_RATE_FIRE_AT_WILL: float = 0.10       # sustained suppressive fire
+const ROE_RATE_RETURN_FIRE: float = 0.03        # reactive bursts
+const ROE_RATE_HALT_AND_ENGAGE: float = 0.15    # heavy focused engagement
 
 # Morale thresholds
-const MORALE_BREAK_THRESHOLD: int = 3
-const MORALE_ROUT_THRESHOLD: int = 2
+const MORALE_BREAK_THRESHOLD: int = 30
+const MORALE_ROUT_THRESHOLD: int = 15
 
 # Selection highlight
 const COLOR_SELECT_OUTLINE := Color(0.7, 0.3, 0.9, 0.9)
@@ -76,6 +76,12 @@ var unit_panel: UnitPanel
 var game_clock: GameClock
 var game_flow_panel: GameFlowPanel
 var order_manager: OrderManager
+var combat: Combat
+
+# Visual combat effects
+# Array of {from: Vector2i, to: Vector2i, time_remaining: float, hit: bool}
+var fire_effects: Array = []
+const FIRE_EFFECT_DURATION := 2.0  # seconds (real time)
 
 
 func _ready() -> void:
@@ -122,27 +128,47 @@ func _load_unit_types() -> void:
 func _place_starting_units() -> void:
 	if terrain_grid.is_empty():
 		return
-	# Place a technical on an open or street hex near the center
+	# Place player technical near the center
 	var center_col := map_cols / 2
 	var center_row := map_rows / 2
-	# Search outward from center for a suitable hex
+	var player_pos := _find_open_hex_near(center_col, center_row)
+	if player_pos != Vector2i(-1, -1):
+		var unit_dict: Dictionary = {
+			"type_code": "TEC",
+			"col": player_pos.x,
+			"row": player_pos.y,
+			"name": "Technical 1",
+			"side": "player",
+		}
+		_init_unit_ammo_and_morale(unit_dict)
+		units.append(unit_dict)
+
+	# Place enemy technical ~8km (16 hexes) away
+	var enemy_pos := _find_open_hex_near(center_col + 16, center_row)
+	if enemy_pos != Vector2i(-1, -1):
+		var enemy_dict: Dictionary = {
+			"type_code": "TEC",
+			"col": enemy_pos.x,
+			"row": enemy_pos.y,
+			"name": "Enemy Technical",
+			"side": "enemy",
+			"default_roe": "fire at will",
+		}
+		_init_unit_ammo_and_morale(enemy_dict)
+		units.append(enemy_dict)
+
+
+func _find_open_hex_near(col: int, row: int) -> Vector2i:
 	for radius in range(0, 10):
 		for dc in range(-radius, radius + 1):
 			for dr in range(-radius, radius + 1):
-				var c := center_col + dc
-				var r := center_row + dr
+				var c := col + dc
+				var r := row + dr
 				if c >= 0 and c < map_cols and r >= 0 and r < map_rows:
 					var code: String = terrain_grid[r][c]
 					if code == "O" or code == "S":
-						var unit_dict: Dictionary = {
-							"type_code": "TEC",
-							"col": c,
-							"row": r,
-							"name": "Technical 1",
-						}
-						_init_unit_ammo_and_morale(unit_dict)
-						units.append(unit_dict)
-						return
+						return Vector2i(c, r)
+	return Vector2i(-1, -1)
 
 
 func _init_unit_ammo_and_morale(unit: Dictionary) -> void:
@@ -153,8 +179,11 @@ func _init_unit_ammo_and_morale(unit: Dictionary) -> void:
 	for w in weapons:
 		ammo_array.append(int(w.get("ammo", 0)))
 	unit["current_ammo"] = ammo_array
-	unit["current_morale"] = int(utype.get("morale", 5))
-	unit["unit_status"] = ""  # "", "BROKEN", "ROUTING"
+	unit["current_morale"] = int(utype.get("morale", 50))
+	unit["current_crew"] = int(utype.get("crew", 4))
+	unit["vehicle_damage"] = 0.0  # 0.0 = pristine, 1.0+ = destroyed
+	unit["unit_status"] = ""  # "", "BROKEN", "ROUTING", "DESTROYED"
+	unit["morale_recovery_accum"] = 0.0  # fractional morale recovery accumulator
 
 
 func _get_effective_roe(unit: Dictionary, order: Order) -> Order.ROE:
@@ -172,30 +201,34 @@ func _get_effective_roe(unit: Dictionary, order: Order) -> Order.ROE:
 	if all_empty and ammo_arr.size() > 0:
 		return Order.ROE.HOLD_FIRE
 	if order == null:
-		return Order.ROE.RETURN_FIRE
+		# Units without orders default to return fire
+		# Check for a standing ROE on the unit dict
+		var default_roe: String = unit.get("default_roe", "return fire")
+		return Order.roe_from_string(default_roe)
 	return order.roe
 
 
-func _consume_ammo(unit: Dictionary, minutes: float) -> void:
+func _resolve_unit_combat(unit: Dictionary, minutes: float) -> void:
 	var uname: String = unit.get("name", "")
+	if unit.get("unit_status", "") == "DESTROYED":
+		return
+
 	var order: Order = order_manager.get_order(uname)
 	var roe: Order.ROE = _get_effective_roe(unit, order)
 
-	# Hold fire: never shoot
 	if roe == Order.ROE.HOLD_FIRE:
 		return
 
-	# Find enemies in range and LOS
 	var targets := _find_targets_in_range(unit)
 	if targets.is_empty():
-		return  # Nothing to shoot at
+		return
 
-	# Halt & Engage only fires when the unit is stopped
+	# Halt & Engage only fires when stopped
 	if roe == Order.ROE.HALT_AND_ENGAGE:
 		if order != null and order.status == Order.Status.EXECUTING:
 			return
 
-	# Return Fire only fires if an enemy can also see us (proxy for "being fired upon")
+	# Return Fire needs someone shooting at us
 	if roe == Order.ROE.RETURN_FIRE:
 		var being_engaged := false
 		for target in targets:
@@ -207,53 +240,135 @@ func _consume_ammo(unit: Dictionary, minutes: float) -> void:
 		if not being_engaged:
 			return
 
-	var burn_rate: float = 0.0
-	match roe:
-		Order.ROE.FIRE_AT_WILL:
-			burn_rate = AMMO_BURN_FIRE_AT_WILL
-		Order.ROE.RETURN_FIRE:
-			burn_rate = AMMO_BURN_RETURN_FIRE
-		Order.ROE.HALT_AND_ENGAGE:
-			burn_rate = AMMO_BURN_HALT_AND_ENGAGE
-
-	var ammo_arr: Array = unit.get("current_ammo", [])
 	var utype_code: String = unit.get("type_code", "")
 	var utype: Dictionary = unit_types.get(utype_code, {})
 	var weapons: Array = utype.get("weapons", [])
-	var consumed_any: bool = false
+	var ammo_arr: Array = unit.get("current_ammo", [])
+	var unit_pos := Vector2i(unit["col"], unit["row"])
+	var is_moving := order != null and order.status == Order.Status.EXECUTING
 
-	for i in range(ammo_arr.size()):
-		var current: int = int(ammo_arr[i])
-		if current <= 0:
+	# ROE multiplier on each weapon's rate_of_fire
+	var roe_mult: float = 0.0
+	match roe:
+		Order.ROE.FIRE_AT_WILL:
+			roe_mult = ROE_RATE_FIRE_AT_WILL
+		Order.ROE.RETURN_FIRE:
+			roe_mult = ROE_RATE_RETURN_FIRE
+		Order.ROE.HALT_AND_ENGAGE:
+			roe_mult = ROE_RATE_HALT_AND_ENGAGE
+
+	# Crew casualties reduce fire rate
+	var crew_ratio: float = 1.0
+	var max_crew: int = int(utype.get("crew", 4))
+	var cur_crew: int = int(unit.get("current_crew", max_crew))
+	if max_crew > 0:
+		crew_ratio = clampf(float(cur_crew) / float(max_crew), 0.0, 1.0)
+	if cur_crew <= 0:
+		return  # No crew left
+
+	var fired_any := false
+
+	for wi in range(weapons.size()):
+		if wi >= ammo_arr.size():
 			continue
-		# Only fire weapons that have targets in their range
-		var w_range_km: float = float(weapons[i].get("range_km", 0))
-		var is_moving := order != null and order.status == Order.Status.EXECUTING
+		var current_ammo: int = int(ammo_arr[wi])
+		if current_ammo <= 0:
+			continue
+
+		var w: Dictionary = weapons[wi]
+		var w_range_km: float = float(w.get("range_km", 0))
+		var w_supp_range_km: float = float(w.get("suppressive_range_km", w_range_km))
 		if is_moving:
-			w_range_km = float(weapons[i].get("range_moving_km", w_range_km * 0.3))
-		var w_range_hexes: float = w_range_km / 0.5
-		var unit_pos := Vector2i(unit["col"], unit["row"])
-		var has_target := false
+			w_range_km = float(w.get("range_moving_km", w_range_km * 0.3))
+			w_supp_range_km = w_range_km  # no suppressive bonus while moving
+		# Max engagement range is the suppressive range
+		var w_max_range_hexes: float = w_supp_range_km / 0.5
+		var w_effective_range_hexes: float = w_range_km / 0.5
+
+		# Find closest valid target for this weapon (within suppressive range)
+		var best_target: Dictionary = {}
+		var best_dist: int = 999
 		for target in targets:
+			if target.get("unit_status", "") == "DESTROYED":
+				continue
 			var t_pos := Vector2i(target["col"], target["row"])
-			if float(_hex_distance(unit_pos, t_pos)) <= w_range_hexes:
-				has_target = true
-				break
-		if not has_target:
+			var dist := _hex_distance(unit_pos, t_pos)
+			if float(dist) <= w_max_range_hexes and dist < best_dist:
+				best_dist = dist
+				best_target = target
+
+		if best_target.is_empty():
 			continue
 
-		var rof: float = 600.0
-		if i < weapons.size():
-			rof = float(weapons[i].get("rate_of_fire", 600))
-		var rof_scale: float = rof / 600.0
-		var consumed: float = burn_rate * rof_scale * minutes
-		var new_ammo: int = maxi(0, current - int(consumed))
-		ammo_arr[i] = new_ammo
-		if new_ammo < current:
-			consumed_any = true
+		# Calculate rounds fired this tick
+		# Weapon RoF * ROE multiplier * time * crew ratio
+		var rof: float = float(w.get("rate_of_fire", 600))
+		var rounds_f: float = rof * roe_mult * minutes * crew_ratio
+		var rounds: int = int(rounds_f)
+		# Stochastic rounding for fractional rounds
+		if randf() < (rounds_f - float(rounds)):
+			rounds += 1
+		rounds = mini(rounds, current_ammo)
+		if rounds <= 0:
+			continue
+
+		# Resolve each shot
+		var target_pos := Vector2i(best_target["col"], best_target["row"])
+		var target_terrain: String = terrain_grid[target_pos.y][target_pos.x]
+		var target_type_code: String = best_target.get("type_code", "")
+		var target_type: Dictionary = unit_types.get(target_type_code, {})
+		var target_armor: int = int(target_type.get("armor", 0))
+		var target_order: Order = order_manager.get_order(best_target.get("name", ""))
+		var target_moving := target_order != null and target_order.status == Order.Status.EXECUTING
+
+		var is_suppressive := float(best_dist) > w_effective_range_hexes
+		var result := combat.resolve_combat(
+			unit, best_target, utype, target_type,
+			wi, rounds, best_dist,
+			is_moving, target_moving,
+			target_terrain, target_armor, is_suppressive)
+
+		# Apply results
+		ammo_arr[wi] = current_ammo - rounds
+		fired_any = true
+
+		if result["hits"] > 0 or result["suppression_added"] > 0:
+			var t_name: String = best_target.get("name", "?")
+			combat.apply_suppression(t_name, result["suppression_added"])
+
+		if result["crew_killed"] > 0:
+			var t_crew: int = int(best_target.get("current_crew", 4))
+			best_target["current_crew"] = maxi(0, t_crew - result["crew_killed"])
+			combat.log_event("%s hit %s: %d casualties" % [
+				uname, best_target.get("name", "?"), result["crew_killed"]])
+
+		if result["vehicle_damage"] > 0.0:
+			var cur_dmg: float = float(best_target.get("vehicle_damage", 0.0))
+			best_target["vehicle_damage"] = cur_dmg + result["vehicle_damage"]
+
+		# Check if target is destroyed
+		var t_crew_left: int = int(best_target.get("current_crew", 0))
+		var t_dmg: float = float(best_target.get("vehicle_damage", 0.0))
+		if t_crew_left <= 0 or t_dmg >= 1.0:
+			best_target["unit_status"] = "DESTROYED"
+			order_manager.cancel_order(best_target.get("name", ""))
+			combat.log_event("%s DESTROYED by %s" % [best_target.get("name", "?"), uname])
+
+		if rounds > 0:
+			# Create fire effect visual
+			fire_effects.append({
+				"from": Vector2i(unit["col"], unit["row"]),
+				"to": target_pos,
+				"time_remaining": FIRE_EFFECT_DURATION,
+				"hit": result["hits"] > 0,
+			})
+		if result["hits"] > 0:
+			var w_name: String = w.get("name", "?")
+			combat.log_event("%s fires %s: %d rounds, %d hits on %s" % [
+				uname, w_name, rounds, result["hits"], best_target.get("name", "?")])
 
 	unit["current_ammo"] = ammo_arr
-	if consumed_any:
+	if fired_any:
 		_check_morale(unit)
 
 
@@ -306,30 +421,87 @@ func _get_ammo_morale_penalty(unit: Dictionary) -> int:
 			all_empty = false
 			break
 	if all_empty and ammo_arr.size() > 0:
-		return 3
+		return 30
 	var lowest_pct: float = _get_lowest_ammo_pct(unit)
 	if lowest_pct < 0.25:
-		return 2
+		return 20
 	elif lowest_pct < 0.50:
-		return 1
+		return 10
 	return 0
 
 
 func _check_morale(unit: Dictionary) -> void:
 	var utype_code: String = unit.get("type_code", "")
 	var utype: Dictionary = unit_types.get(utype_code, {})
-	var base_morale: int = int(utype.get("morale", 5))
+	var base_morale: int = int(utype.get("morale", 50))
 	var penalty: int = _get_ammo_morale_penalty(unit)
+
+	# Suppression penalty (proportional, not stepped)
+	var uname: String = unit.get("name", "")
+	var supp: float = combat.get_suppression(uname)
+	penalty += int(supp * 0.3)  # 100% suppression = -30 morale
+
+	# Crew loss penalty (proportional)
+	var max_crew: int = int(utype.get("crew", 4))
+	var cur_crew: int = int(unit.get("current_crew", max_crew))
+	if max_crew > 0:
+		var crew_lost_pct: float = 1.0 - (float(cur_crew) / float(max_crew))
+		penalty += int(crew_lost_pct * 40)  # all crew dead = -40
+
 	var effective_morale: int = maxi(0, base_morale - penalty)
 	unit["current_morale"] = effective_morale
 
 	var status: String = unit.get("unit_status", "")
+	if status == "DESTROYED":
+		return
 	if effective_morale < MORALE_ROUT_THRESHOLD and status != "ROUTING":
 		unit["unit_status"] = "ROUTING"
 		_start_rout(unit)
+		combat.log_event("%s is ROUTING!" % uname)
 	elif effective_morale < MORALE_BREAK_THRESHOLD and status != "ROUTING" and status != "BROKEN":
 		unit["unit_status"] = "BROKEN"
 		_start_break(unit)
+		combat.log_event("%s has BROKEN!" % uname)
+
+
+func _recover_morale(unit: Dictionary, minutes: float) -> void:
+	var status: String = unit.get("unit_status", "")
+	if status == "DESTROYED":
+		return
+
+	var uname: String = unit.get("name", "")
+	var supp: float = combat.get_suppression(uname)
+	if supp > 0.0:
+		# Still under fire - no recovery, reset accumulator
+		unit["morale_recovery_accum"] = 0.0
+		return
+
+	var utype_code: String = unit.get("type_code", "")
+	var utype: Dictionary = unit_types.get(utype_code, {})
+	var base_morale: int = int(utype.get("morale", 50))
+	var recovery_rate: float = float(utype.get("morale_recovery_per_min", 1.0))
+	var current: int = int(unit.get("current_morale", base_morale))
+
+	if current >= base_morale:
+		return  # Already at max
+
+	var accum: float = float(unit.get("morale_recovery_accum", 0.0))
+	accum += recovery_rate * minutes
+	if accum >= 1.0:
+		var gain: int = int(accum)
+		current = mini(current + gain, base_morale)
+		unit["current_morale"] = current
+		accum -= float(gain)
+
+		# Recover from broken/routing if morale is high enough
+		if status == "BROKEN" and current >= MORALE_BREAK_THRESHOLD:
+			unit["unit_status"] = ""
+			combat.log_event("%s has rallied" % uname)
+		elif status == "ROUTING" and current >= MORALE_BREAK_THRESHOLD:
+			unit["unit_status"] = ""
+			combat.log_event("%s has rallied from rout" % uname)
+
+	unit["morale_recovery_accum"] = accum
 
 
 func _start_break(unit: Dictionary) -> void:
@@ -532,6 +704,8 @@ func _setup_game_flow() -> void:
 	order_manager = OrderManager.new()
 	add_child(order_manager)
 
+	combat = Combat.new()
+
 	game_clock.time_advanced.connect(_on_time_advanced)
 	game_clock.phase_changed.connect(_on_phase_changed)
 
@@ -571,9 +745,13 @@ func _on_order_cleared(unit_name: String) -> void:
 func _on_time_advanced(minutes: float) -> void:
 	order_manager.update_orders(game_clock.game_time_minutes)
 	_move_units(minutes)
-	# Consume ammo and check morale for all units
+	# Resolve combat for all units and decay suppression
 	for unit in units:
-		_consume_ammo(unit, minutes)
+		_resolve_unit_combat(unit, minutes)
+	combat.decay_suppression(minutes)
+	# Recover morale for units not under fire
+	for unit in units:
+		_recover_morale(unit, minutes)
 	# Keep selection tracking the selected unit
 	if not selected_unit.is_empty():
 		selected_hex = Vector2i(selected_unit["col"], selected_unit["row"])
@@ -642,7 +820,7 @@ func _move_units(minutes: float) -> void:
 
 			# Find next hex toward current waypoint
 			var unit_training: String = str(utype.get("training", "regular"))
-			var unit_morale: int = int(utype.get("morale", 5))
+			var unit_morale: int = int(utype.get("morale", 50))
 			var next_hex := _next_step_toward(current, target, posture_str, unit_training, unit_morale)
 
 			# Hesitation: low morale/poorly trained units in cover may stall
@@ -659,7 +837,7 @@ func _move_units(minutes: float) -> void:
 						"militia": hesitate_chance = 0.6
 						"irregular": hesitate_chance = 0.4
 						"regular": hesitate_chance = 0.1
-					hesitate_chance *= clampf((6.0 - unit_morale) / 5.0, 0.0, 1.0)
+					hesitate_chance *= clampf((60.0 - unit_morale) / 50.0, 0.0, 1.0)
 					if randf() < hesitate_chance:
 						# Stall for 15-60 minutes
 						var stall_minutes := randf_range(15.0, 60.0)
@@ -692,7 +870,7 @@ func _move_units(minutes: float) -> void:
 
 
 func _next_step_toward(from: Vector2i, to: Vector2i, posture_name: String = "normal",
-		_training: String = "regular", _morale: int = 5) -> Vector2i:
+		_training: String = "regular", _morale: int = 50) -> Vector2i:
 	var neighbors := _get_hex_neighbors(from)
 	var best := from
 	var best_score := 999999.0
@@ -791,6 +969,17 @@ func _process(delta: float) -> void:
 		_clamp_camera()
 		queue_redraw()
 
+	# Decay fire effects (real time, not game time)
+	var effects_to_remove: Array[int] = []
+	for i in range(fire_effects.size()):
+		fire_effects[i]["time_remaining"] = float(fire_effects[i]["time_remaining"]) - delta
+		if float(fire_effects[i]["time_remaining"]) <= 0:
+			effects_to_remove.append(i)
+	for i in range(effects_to_remove.size() - 1, -1, -1):
+		fire_effects.remove_at(effects_to_remove[i])
+	if not fire_effects.is_empty():
+		queue_redraw()
+
 	# Update info label
 	_update_info_label()
 
@@ -887,31 +1076,47 @@ func _draw() -> void:
 				var w: Dictionary = weapons[wi]
 				var range_static: float = float(w.get("range_km", 0))
 				var range_moving: float = float(w.get("range_moving_km", range_static * 0.3))
+				var supp_range: float = float(w.get("suppressive_range_km", range_static))
 				var range_km: float = range_moving if is_moving else range_static
-				var range_hexes: float = range_km / 0.5
+				var supp_km: float = range_moving if is_moving else supp_range
 				var ring_color: Color = ring_colors[wi % ring_colors.size()]
-				var ring_radius := range_hexes * hex_height * zoom_level
-
-				# Draw ring as segmented circle - dashed when moving
-				var segments := 48
 				var line_w := maxf(1.5, scaled_size * 0.04)
+				var segments := 48
+
+				# Draw suppressive range ring (dashed, dimmer)
+				if supp_km > range_km:
+					var supp_radius := (supp_km / 0.5) * hex_height * zoom_level
+					var supp_color := ring_color
+					supp_color.a *= 0.4
+					for i in range(segments):
+						if i % 3 == 0:
+							continue  # dashed
+						var a0 := deg_to_rad(float(i) / segments * 360.0)
+						var a1 := deg_to_rad(float(i + 1) / segments * 360.0)
+						var p0 := unit_screen + Vector2(cos(a0), sin(a0)) * supp_radius
+						var p1 := unit_screen + Vector2(cos(a1), sin(a1)) * supp_radius
+						draw_line(p0, p1, supp_color, line_w * 0.7)
+
+				# Draw effective range ring (solid)
+				var range_hexes: float = range_km / 0.5
+				var ring_radius := range_hexes * hex_height * zoom_level
 				for i in range(segments):
 					if is_moving and i % 3 == 0:
-						continue  # dashed when moving
+						continue
 					var a0 := deg_to_rad(float(i) / segments * 360.0)
 					var a1 := deg_to_rad(float(i + 1) / segments * 360.0)
 					var p0 := unit_screen + Vector2(cos(a0), sin(a0)) * ring_radius
 					var p1 := unit_screen + Vector2(cos(a1), sin(a1)) * ring_radius
 					draw_line(p0, p1, ring_color, line_w)
 
-				# Label the ring
+				# Label
 				if scaled_size > 10:
 					var font := ThemeDB.fallback_font
 					var wname: String = w.get("name", "?")
 					var move_tag := " MOV" if is_moving else ""
 					var label_text := "%s (%.1fkm%s)" % [wname, range_km, move_tag]
 					var font_size := int(clampf(scaled_size * 0.18, 8, 13))
-					var label_pos := unit_screen + Vector2(ring_radius + 4, -font_size * 0.5 - wi * (font_size + 2))
+					var label_pos := unit_screen + Vector2(ring_radius + 4, -font_size * 0.5 - wi * (font_size + 4))
 					draw_string(font, label_pos + Vector2(1, 1), label_text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color(0, 0, 0, 0.6))
 					draw_string(font, label_pos, label_text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, ring_color)
 
@@ -983,7 +1188,27 @@ func _draw() -> void:
 			var center := (_hex_to_pixel(uc, ur) - camera_offset / zoom_level) * zoom_level
 			var type_code: String = unit["type_code"]
 			if type_code in unit_types:
-				_draw_unit_counter(center, scaled_size, unit_types[type_code], unit["name"])
+				_draw_unit_counter(center, scaled_size, unit_types[type_code], unit["name"], unit.get("side", "player"))
+
+	# Draw fire effects - red lines from shooter to target, flash on hit
+	for effect in fire_effects:
+		var from_hex: Vector2i = effect["from"]
+		var to_hex: Vector2i = effect["to"]
+		var t_remaining: float = float(effect["time_remaining"])
+		var is_hit: bool = effect["hit"]
+		var alpha: float = clampf(t_remaining / FIRE_EFFECT_DURATION, 0.0, 1.0)
+
+		var from_screen := (_hex_to_pixel(from_hex.x, from_hex.y) - camera_offset / zoom_level) * zoom_level
+		var to_screen := (_hex_to_pixel(to_hex.x, to_hex.y) - camera_offset / zoom_level) * zoom_level
+
+		# Fire line
+		var line_color := Color(1.0, 0.3, 0.1, alpha * 0.7)
+		draw_line(from_screen, to_screen, line_color, maxf(1.5, scaled_size * 0.03))
+
+		# Flash on target hex if hit
+		if is_hit:
+			var flash_alpha := alpha * 0.4
+			_draw_hex_filled(to_screen, scaled_size * 0.9, Color(1.0, 0.1, 0.0, flash_alpha))
 
 
 func _draw_hex_filled(center: Vector2, size: float, color: Color) -> void:
@@ -1106,12 +1331,14 @@ func _draw_city(center: Vector2, size: float) -> void:
 				wx += s * 0.7
 
 
-func _draw_unit_counter(center: Vector2, hex_sz: float, utype: Dictionary, uname: String) -> void:
+func _draw_unit_counter(center: Vector2, hex_sz: float, utype: Dictionary, uname: String, side: String = "player") -> void:
 	var s := hex_sz * 0.55
 	var rect := Rect2(center - Vector2(s, s * 0.6), Vector2(s * 2, s * 1.2))
 
-	# Counter background
+	# Counter background - red tint for enemies
 	var bg_color: Color = utype["icon_color"]
+	if side == "enemy":
+		bg_color = Color(0.8, 0.25, 0.2)
 	draw_rect(rect, bg_color)
 
 	# Counter border
@@ -1301,7 +1528,8 @@ func _update_info_label() -> void:
 			var utype_code: String = unit["type_code"]
 			var utype: Dictionary = unit_types.get(utype_code, {})
 			var order: Order = order_manager.get_order(unit.get("name", ""))
-			unit_panel.show_unit(unit, utype, order, game_clock.game_time_minutes)
+			var supp_val: float = combat.get_suppression(unit.get("name", ""))
+			unit_panel.show_unit(unit, utype, order, game_clock.game_time_minutes, supp_val)
 		else:
 			unit_panel.hide_unit()
 
