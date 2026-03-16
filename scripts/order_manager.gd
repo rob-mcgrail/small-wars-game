@@ -5,6 +5,7 @@ extends Node
 var staff_base_minutes: float = 10.0
 var staff_training_modifiers: Dictionary = {}
 var staff_countermand_penalty: float = 1.5
+var staff_warm_start_modifier: float = 0.4
 
 var unit_prep_base_minutes: float = 5.0
 var unit_prep_training_modifiers: Dictionary = {}
@@ -26,6 +27,7 @@ func _ready() -> void:
 	for key in staff_mods:
 		staff_training_modifiers[key] = float(staff_mods[key])
 	staff_countermand_penalty = cfg.get_float("staff_formulation.countermand_penalty", 1.5)
+	staff_warm_start_modifier = cfg.get_float("staff_formulation.warm_start_modifier", 0.4)
 
 	unit_prep_base_minutes = cfg.get_float("unit_preparation.base_minutes", 5.0)
 	var prep_mods = cfg.get_value("unit_preparation.training_modifier", {})
@@ -55,14 +57,19 @@ func issue_order(unit: Dictionary, unit_type: Dictionary, order_type: Order.Type
 				Order.posture_to_string(posture).to_upper()])
 			return existing
 
-	# Countermand if executing
+	# Check for warm start (same order type, not countermanding)
 	var countermanding := false
+	var warm_start := false
 	if unit_name in active_orders:
 		var existing: Order = active_orders[unit_name]
 		if existing.status == Order.Status.EXECUTING:
 			countermanding = true
 			existing.status = Order.Status.COUNTERMANDED
 			_log("Order countermanded: %s" % unit_name)
+		elif existing.status == Order.Status.COMPLETE:
+			# Previous order finished - check if same type for warm start
+			if existing.type == order_type:
+				warm_start = true
 
 	var order := Order.new()
 	order.type = order_type
@@ -76,12 +83,16 @@ func issue_order(unit: Dictionary, unit_type: Dictionary, order_type: Order.Type
 	order.formulation_time = staff_base_minutes * staff_mod * hq_modifier
 	if countermanding:
 		order.formulation_time *= staff_countermand_penalty
+	elif warm_start:
+		order.formulation_time *= staff_warm_start_modifier
 
 	# Calculate unit preparation time
 	var prep_mod: float = unit_prep_training_modifiers.get(training, 1.0)
 	var order_type_str := Order.type_to_string(order_type)
 	var order_mod: float = unit_prep_order_modifiers.get(order_type_str, 1.0)
 	order.preparation_time = unit_prep_base_minutes * prep_mod * order_mod * hq_modifier
+	if warm_start:
+		order.preparation_time *= staff_warm_start_modifier
 
 	active_orders[unit_name] = order
 

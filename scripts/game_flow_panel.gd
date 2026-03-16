@@ -202,39 +202,44 @@ func _process(_delta: float) -> void:
 
 
 func _on_phase_changed(phase: String) -> void:
-	if phase == "ORDERS":
-		ooda_cycles_passed += 1
-	_update_phase_display(phase)
-
-
-func _update_phase_display(phase: String) -> void:
 	phase_label.text = phase
 	if phase == "ORDERS":
 		phase_label.add_theme_color_override("font_color", Color(0.4, 0.85, 0.3))
-		action_button.text = "EXECUTE ORDERS"
-		action_button.disabled = false
-		can_interrupt = false
-		_set_button_style_green()
 	else:
 		phase_label.add_theme_color_override("font_color", Color(0.85, 0.65, 0.2))
-		action_button.text = "EXECUTING..."
-		action_button.disabled = true
-		can_interrupt = false
-		_set_button_style_disabled()
+	_update_button_state()
 
 
 func set_interruptable() -> void:
-	## Called by hex_map when auto-continue skips an orders phase
-	if not can_interrupt:
-		can_interrupt = true
-		action_button.text = "INTERRUPT"
-		action_button.disabled = false
-		_set_button_style_orange()
+	can_interrupt = true
+	_update_button_state()
 
 
 func reset_ooda_count() -> void:
 	ooda_cycles_passed = 0
 	can_interrupt = false
+	_update_button_state()
+
+
+func _update_button_state() -> void:
+	if game_clock == null:
+		return
+	if game_clock.is_orders_phase():
+		# Green: EXECUTE ORDERS
+		action_button.text = "EXECUTE ORDERS"
+		action_button.disabled = false
+		can_interrupt = false
+		_set_button_style_green()
+	elif can_interrupt:
+		# Orange: INTERRUPT WITH ORDERS
+		action_button.text = "INTERRUPT WITH ORDERS"
+		action_button.disabled = false
+		_set_button_style_orange()
+	else:
+		# Grey: EXECUTING
+		action_button.text = "EXECUTING..."
+		action_button.disabled = true
+		_set_button_style_disabled()
 
 
 func _set_button_style_green() -> void:

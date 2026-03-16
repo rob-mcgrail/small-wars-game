@@ -50,6 +50,9 @@ staff_formulation:
     elite: 0.5
   # Penalty for changing an existing order mid-execution (multiplied by base)
   countermand_penalty: 1.5
+  # Warm start: discount when issuing same order type as current/previous
+  # e.g. move -> move with same posture = quick adjustment not a full replan
+  warm_start_modifier: 0.4
 
 unit_preparation:
   # Base time for a unit to prepare after receiving an order
@@ -106,6 +109,11 @@ hq:
   los_morale_buff: 20
   los_accuracy_buff: 1.2
   los_suppression_resistance: 0.85
+  # OODA penalty when combat units report directly to top-level HQ
+  # (bypassing company HQ layer - less efficient)
+  direct_to_top_hq_ooda_penalty: 1.3
+  # Time to switch HQ when auto-reassigning (minutes)
+  auto_switch_minutes: 10
 
 # Unit destruction effects
 destruction:

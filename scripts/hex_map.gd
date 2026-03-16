@@ -105,6 +105,8 @@ var ooda_hq_moving_penalty: float = 1.5
 var ooda_hq_suppressed_penalty: float = 2.0
 var ooda_hq_destroyed_penalty: float = 3.0
 var ooda_hq_crew_loss_per: float = 0.25
+var ooda_direct_to_top_penalty: float = 1.3
+var hq_auto_switch_minutes: float = 10.0
 
 # Night config
 var sunrise_hour: int = 6
@@ -182,6 +184,8 @@ func _load_hq_config() -> void:
 	ooda_hq_suppressed_penalty = cfg.get_float("ooda.hq_suppressed_penalty", 2.0)
 	ooda_hq_destroyed_penalty = cfg.get_float("ooda.hq_destroyed_penalty", 3.0)
 	ooda_hq_crew_loss_per = cfg.get_float("ooda.hq_crew_loss_penalty_per", 0.25)
+	ooda_direct_to_top_penalty = cfg.get_float("hq.direct_to_top_hq_ooda_penalty", 1.3)
+	hq_auto_switch_minutes = cfg.get_float("hq.auto_switch_minutes", 10.0)
 
 	# Night config
 	sunrise_hour = cfg.get_int("time.sunrise_hour", 6)
@@ -419,6 +423,42 @@ func _update_hq_comms(minutes: float) -> void:
 		var hq_pos := Vector2i(hq_unit["col"], hq_unit["row"])
 		var distance: int = _hex_distance(unit_pos, hq_pos)
 		unit["in_comms"] = float(distance) <= comms_range_hexes
+
+		# If out of comms, try to find another friendly HQ in range
+		if not unit.get("in_comms", false):
+			var best_hq_name := ""
+			var best_hq_dist := 9999
+			var unit_side: String = unit.get("side", "player")
+			for other in units:
+				if other.get("side", "player") != unit_side:
+					continue
+				if other == unit:
+					continue
+				if other.get("unit_status", "") == "DESTROYED":
+					continue
+				var other_utype: Dictionary = unit_types.get(other.get("type_code", ""), {})
+				if not other_utype.get("is_hq", false):
+					continue
+				if other.get("name", "") == assigned_hq_name:
+					continue  # already checked this one
+				var other_comms = other_utype.get("comms", {})
+				if not (other_comms is Dictionary) or other_comms.is_empty():
+					continue
+				var other_range: float = float(other_comms.get("range_km", 0)) / 0.5
+				var other_pos := Vector2i(other["col"], other["row"])
+				var other_dist: int = _hex_distance(unit_pos, other_pos)
+				if float(other_dist) <= other_range and other_dist < best_hq_dist:
+					best_hq_dist = other_dist
+					best_hq_name = other.get("name", "")
+			if best_hq_name != "":
+				unit["assigned_hq"] = best_hq_name
+				unit["hq_switch_remaining"] = hq_auto_switch_minutes
+				unit["in_comms"] = false
+				unit["in_hq_los"] = false
+				combat.log_event("%s switching to %s (10 min)" % [
+					unit.get("name", "?"), best_hq_name])
+				continue
+
 		# LOS check is independent of comms - within spotting range and can see HQ
 		var unit_spot: int = _get_effective_spotting_range(unit)
 		var unit_elev: int = elevation_grid[unit_pos.y][unit_pos.x]
@@ -636,15 +676,21 @@ func _resolve_unit_combat(unit: Dictionary, minutes: float) -> void:
 					disabled_name = str(t_weapons[disable_idx].get("name", "weapon"))
 				combat.log_event("%s: %s DISABLED by %s" % [best_target.get("name", "?"), disabled_name, uname])
 
-		# Check if target is destroyed
+		# Check if target is destroyed or should abandon vehicle
 		var t_crew_left: int = int(best_target.get("current_crew", 0))
 		var t_dmg: float = float(best_target.get("vehicle_damage", 0.0))
+		var t_mob_dmg: float = float(best_target.get("mobility_damage", 0.0))
 		if t_crew_left <= 0 or t_dmg >= 1.0:
 			if best_target.get("unit_status", "") != "DESTROYED":
 				best_target["unit_status"] = "DESTROYED"
 				order_manager.cancel_order(best_target.get("name", ""))
 				combat.log_event("%s DESTROYED by %s" % [best_target.get("name", "?"), uname])
 				_on_unit_destroyed(best_target)
+		elif (t_dmg >= 0.7 or t_mob_dmg >= 0.8) and t_crew_left > 0:
+			# Vehicle is wrecked - crew abandons
+			var t_status: String = best_target.get("unit_status", "")
+			if t_status != "DESTROYED":
+				_abandon_vehicle(best_target)
 
 		if rounds > 0:
 			# Create fire effect visual
@@ -790,12 +836,35 @@ func _check_morale(unit: Dictionary) -> void:
 	var supp: float = combat.get_suppression(uname)
 	penalty += int(supp * 0.3)  # 100% suppression = -30 morale
 
+	# No HQ penalty - fighting alone is demoralising
+	if not unit.get("in_comms", false) and not utype.get("is_hq", false):
+		penalty += 10
+
 	# Crew loss penalty (proportional)
 	var max_crew: int = int(utype.get("crew", 4))
 	var cur_crew: int = int(unit.get("current_crew", max_crew))
 	if max_crew > 0:
 		var crew_lost_pct: float = 1.0 - (float(cur_crew) / float(max_crew))
 		penalty += int(crew_lost_pct * 40)  # all crew dead = -40
+
+	# Proximity to enemy while damaged - sitting duck panic
+	var vdmg: float = float(unit.get("vehicle_damage", 0.0))
+	if vdmg > 0.3 or mob_dmg > 0.3:
+		var unit_pos_check := Vector2i(unit["col"], unit["row"])
+		var unit_side_check: String = unit.get("side", "player")
+		var enemy_close := false
+		for other in units:
+			if other.get("side", "player") == unit_side_check:
+				continue
+			if other.get("unit_status", "") == "DESTROYED":
+				continue
+			var other_pos := Vector2i(other["col"], other["row"])
+			if _hex_distance(unit_pos_check, other_pos) <= 3:
+				enemy_close = true
+				break
+		if enemy_close:
+			var damage_panic: int = int((vdmg + mob_dmg) * 15)
+			penalty += damage_panic
 
 	# Elevation morale modifier: high ground gives confidence, low ground penalizes
 	var elev_bonus: int = 0
@@ -952,6 +1021,70 @@ func _update_pursuit_target(unit: Dictionary, target: Dictionary, pursuit_mode: 
 			# Close in aggressively
 			_issue_immediate_order(unit, Order.Type.MOVE, target_pos,
 				Order.Posture.FAST, Order.ROE.FIRE_AT_WILL)
+
+
+func _abandon_vehicle(unit: Dictionary) -> void:
+	var uname: String = unit.get("name", "?")
+	combat.log_event("%s crew abandoning vehicle!" % uname)
+
+	# Mark the vehicle as destroyed
+	unit["unit_status"] = "DESTROYED"
+	order_manager.cancel_order(uname)
+
+	# Place death marker for the vehicle
+	var pos := Vector2i(unit["col"], unit["row"])
+	death_markers[pos] = game_clock.game_time_minutes
+
+	# Create a dismounted crew unit in its place
+	var crew_left: int = int(unit.get("current_crew", 1))
+	var side: String = unit.get("side", "player")
+	var assigned_hq: String = unit.get("assigned_hq", "")
+	var infantry_name := uname + " (dismounted)"
+
+	# Carry over rifle ammo from the vehicle
+	var old_ammo: Array = unit.get("current_ammo", [])
+	var old_utype: Dictionary = unit_types.get(unit.get("type_code", ""), {})
+	var old_weapons: Array = old_utype.get("weapons", [])
+	if not (old_weapons is Array):
+		old_weapons = []
+	var carried_rifle_ammo: int = 0
+	for wi in range(old_weapons.size()):
+		var w: Dictionary = old_weapons[wi]
+		if str(w.get("type", "")) == "rifle" and wi < old_ammo.size():
+			carried_rifle_ammo += int(old_ammo[wi])
+
+	var infantry: Dictionary = {
+		"type_code": "INF",
+		"col": pos.x,
+		"row": pos.y,
+		"name": infantry_name,
+		"side": side,
+		"default_roe": "hold fire",
+	}
+	_init_unit_ammo_and_morale(infantry)
+
+	# Override with carried ammo and crew count
+	infantry["current_crew"] = crew_left
+	infantry["current_morale"] = 10
+	infantry["morale_damage"] = 35
+	var inf_ammo: Array = infantry.get("current_ammo", [])
+	if inf_ammo.size() > 0:
+		inf_ammo[0] = mini(carried_rifle_ammo, 360)
+	infantry["current_ammo"] = inf_ammo
+
+	if assigned_hq != "":
+		infantry["assigned_hq"] = assigned_hq
+
+	units.append(infantry)
+
+	# Immediately start routing
+	infantry["unit_status"] = "ROUTING"
+	_start_rout(infantry)
+
+	# Trigger destruction morale shock for the vehicle loss
+	_on_unit_destroyed(unit)
+
+	combat.log_event("%s: %d crew dismounted, routing on foot" % [infantry_name, crew_left])
 
 
 func _on_unit_destroyed(dead_unit: Dictionary) -> void:
@@ -1450,6 +1583,24 @@ func _calculate_ooda_cycle() -> float:
 		cycle *= crew_mult
 		breakdown.append("HQ casualties (%d lost): x%.1f" % [crew_lost, crew_mult])
 
+	# Check if any combat units are directly under top-level HQ (bypassing company layer)
+	var top_hq_name: String = top_hq.get("name", "")
+	var has_direct_reports := false
+	for u in units:
+		if u.get("side", "player") != "player":
+			continue
+		if u.get("unit_status", "") == "DESTROYED":
+			continue
+		var u_utype: Dictionary = unit_types.get(u.get("type_code", ""), {})
+		if u_utype.get("is_hq", false):
+			continue
+		if u.get("assigned_hq", "") == top_hq_name:
+			has_direct_reports = true
+			break
+	if has_direct_reports:
+		cycle *= ooda_direct_to_top_penalty
+		breakdown.append("Units under direct BHQ command: x%.1f" % ooda_direct_to_top_penalty)
+
 	# Night penalty
 	if _is_night():
 		cycle *= night_ooda_penalty
@@ -1817,17 +1968,26 @@ func _move_units(minutes: float) -> void:
 				unit["move_accumulator"] = 0.0
 				break
 
-			# Can't enter a hex occupied by any other unit
-			var hex_blocked := false
+			# Check hex occupancy
+			var hex_occupied := false
+			var occupied_by_enemy := false
 			for other in units:
 				if other == unit:
 					continue
 				if other.get("unit_status", "") == "DESTROYED":
 					continue
 				if int(other["col"]) == next_hex.x and int(other["row"]) == next_hex.y:
-					hex_blocked = true
+					hex_occupied = true
+					if other.get("side", "player") != unit.get("side", "player"):
+						occupied_by_enemy = true
 					break
-			if hex_blocked:
+			# Never enter enemy-occupied hex
+			if occupied_by_enemy:
+				unit["move_accumulator"] = 0.0
+				break
+			# Can pass through friendly hexes but can't stop there
+			if hex_occupied and next_hex == target:
+				# Destination is occupied - stop one hex short
 				unit["move_accumulator"] = 0.0
 				break
 
