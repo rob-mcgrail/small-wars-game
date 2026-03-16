@@ -1,12 +1,16 @@
 class_name GameFlowPanel
 extends CanvasLayer
 
+signal auto_continue_changed(mode: String)
+
 var panel: PanelContainer
 var time_label: Label
 var phase_label: Label
 var next_orders_label: Label
 var cycle_label: Label
 var action_button: Button
+var continue_complete_cb: CheckBox
+var continue_engaged_cb: CheckBox
 
 var game_clock: GameClock
 
@@ -121,6 +125,33 @@ func _ready() -> void:
 
 	action_button.pressed.connect(_on_action_pressed)
 	vbox.add_child(action_button)
+
+	# Auto-continue checkboxes
+	var sep2 := HSeparator.new()
+	sep2.add_theme_color_override("separator", Color(0.3, 0.32, 0.25, 0.3))
+	vbox.add_child(sep2)
+
+	continue_complete_cb = CheckBox.new()
+	continue_complete_cb.text = "Progress until need orders"
+	continue_complete_cb.button_pressed = true
+	continue_complete_cb.add_theme_font_size_override("font_size", 12)
+	continue_complete_cb.add_theme_color_override("font_color", Color(0.7, 0.72, 0.65))
+	vbox.add_child(continue_complete_cb)
+
+	continue_engaged_cb = CheckBox.new()
+	continue_engaged_cb.text = "Progress until engaged"
+	continue_engaged_cb.button_pressed = true
+	continue_engaged_cb.add_theme_font_size_override("font_size", 12)
+	continue_engaged_cb.add_theme_color_override("font_color", Color(0.7, 0.72, 0.65))
+	vbox.add_child(continue_engaged_cb)
+
+
+func is_progress_until_orders() -> bool:
+	return continue_complete_cb.button_pressed
+
+
+func is_progress_until_engaged() -> bool:
+	return continue_engaged_cb.button_pressed
 
 
 func set_clock(clock: GameClock) -> void:

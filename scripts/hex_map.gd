@@ -78,6 +78,23 @@ var game_flow_panel: GameFlowPanel
 var order_manager: OrderManager
 var combat: Combat
 
+# Display toggles
+var show_los := true
+var show_comms := true
+var show_weapon_ranges := true
+var show_units := true
+var show_elevation := false
+var show_move_cost := false
+var display_bar: CanvasLayer
+
+# HQ config (loaded from game.yaml)
+var hq_switching_cost: float = 15.0
+var hq_comms_order_buff: float = 0.8
+var hq_los_order_buff: float = 0.6
+var hq_los_morale_buff: int = 5
+var hq_los_accuracy_buff: float = 1.1
+var hq_los_suppression_resistance: float = 0.85
+
 # Visual combat effects
 # Array of {from: Vector2i, to: Vector2i, time_remaining: float, hit: bool}
 var fire_effects: Array = []
@@ -88,13 +105,38 @@ func _ready() -> void:
 	_load_terrain_types()
 	_load_unit_types()
 	_load_display_config()
+	_load_hq_config()
 	_load_map()
 	_place_starting_units()
 	_setup_info_label()
 	_setup_hex_panel()
 	_setup_unit_panel()
 	_setup_game_flow()
-	camera_offset = Vector2(-100, -50)
+	_setup_display_bar()
+	# Run one tick to initialize all systems (comms, morale, LOS, etc.)
+	_on_time_advanced(0.0)
+	# Select and center on Battalion HQ at start
+	var found_hq := false
+	for unit in units:
+		if unit.get("side", "player") == "player":
+			var utype: Dictionary = unit_types.get(unit.get("type_code", ""), {})
+			if utype.get("is_hq", false) and int(utype.get("hq_level", 0)) == 1:
+				_select_and_center_unit(unit)
+				found_hq = true
+				break
+	if not found_hq:
+		camera_offset = Vector2(-100, -50)
+
+
+func _load_hq_config() -> void:
+	var cfg := Config.new()
+	cfg.load_file("res://config/game.yaml")
+	hq_switching_cost = cfg.get_float("hq.switching_cost_minutes", 15.0)
+	hq_comms_order_buff = cfg.get_float("hq.comms_order_buff", 0.8)
+	hq_los_order_buff = cfg.get_float("hq.los_order_buff", 0.6)
+	hq_los_morale_buff = cfg.get_int("hq.los_morale_buff", 5)
+	hq_los_accuracy_buff = cfg.get_float("hq.los_accuracy_buff", 1.1)
+	hq_los_suppression_resistance = cfg.get_float("hq.los_suppression_resistance", 0.85)
 
 
 func _load_terrain_types() -> void:
@@ -157,6 +199,39 @@ func _place_starting_units() -> void:
 		_init_unit_ammo_and_morale(enemy_dict)
 		units.append(enemy_dict)
 
+	# Place Battalion HQ 6 hexes behind center
+	var bhq_pos := _find_open_hex_near(center_col - 6, center_row)
+	if bhq_pos != Vector2i(-1, -1):
+		var bhq_dict: Dictionary = {
+			"type_code": "BHQ",
+			"col": bhq_pos.x,
+			"row": bhq_pos.y,
+			"name": "Battalion HQ",
+			"side": "player",
+		}
+		_init_unit_ammo_and_morale(bhq_dict)
+		units.append(bhq_dict)
+
+	# Place Company HQ 3 hexes behind center
+	var shq_pos := _find_open_hex_near(center_col - 3, center_row)
+	if shq_pos != Vector2i(-1, -1):
+		var shq_dict: Dictionary = {
+			"type_code": "SHQ",
+			"col": shq_pos.x,
+			"row": shq_pos.y,
+			"name": "Company HQ",
+			"side": "player",
+		}
+		_init_unit_ammo_and_morale(shq_dict)
+		shq_dict["assigned_hq"] = "Battalion HQ"
+		units.append(shq_dict)
+
+	# Set Technical 1's assigned HQ
+	for u in units:
+		if u.get("name", "") == "Technical 1":
+			u["assigned_hq"] = "Company HQ"
+			break
+
 
 func _find_open_hex_near(col: int, row: int) -> Vector2i:
 	for radius in range(0, 10):
@@ -185,6 +260,10 @@ func _init_unit_ammo_and_morale(unit: Dictionary) -> void:
 	unit["mobility_damage"] = 0.0  # 0.0 = fine, 1.0+ = IMMOBILISED
 	unit["unit_status"] = ""  # "", "BROKEN", "ROUTING", "DESTROYED", "IMMOBILISED"
 	unit["morale_recovery_accum"] = 0.0  # fractional morale recovery accumulator
+	unit["assigned_hq"] = ""
+	unit["in_comms"] = false
+	unit["in_hq_los"] = false
+	unit["hq_switch_remaining"] = 0.0
 
 
 func _get_effective_roe(unit: Dictionary, order: Order) -> Order.ROE:
@@ -207,6 +286,68 @@ func _get_effective_roe(unit: Dictionary, order: Order) -> Order.ROE:
 		var default_roe: String = unit.get("default_roe", "return fire")
 		return Order.roe_from_string(default_roe)
 	return order.roe
+
+
+func _update_hq_comms(minutes: float) -> void:
+	for unit in units:
+		if unit.get("unit_status", "") == "DESTROYED":
+			continue
+		var switch_remaining: float = float(unit.get("hq_switch_remaining", 0.0))
+		if switch_remaining > 0:
+			unit["hq_switch_remaining"] = maxf(0.0, switch_remaining - minutes)
+			unit["in_comms"] = false
+			unit["in_hq_los"] = false
+			continue
+		var assigned_hq_name: String = unit.get("assigned_hq", "")
+		if assigned_hq_name == "":
+			unit["in_comms"] = false
+			unit["in_hq_los"] = false
+			continue
+		# Find the assigned HQ unit
+		var hq_unit: Dictionary = {}
+		for other in units:
+			if other.get("name", "") == assigned_hq_name:
+				hq_unit = other
+				break
+		if hq_unit.is_empty() or hq_unit.get("unit_status", "") == "DESTROYED":
+			unit["in_comms"] = false
+			unit["in_hq_los"] = false
+			continue
+		# Get HQ unit type's comms range
+		var hq_type_code: String = hq_unit.get("type_code", "")
+		var hq_utype: Dictionary = unit_types.get(hq_type_code, {})
+		var comms_data: Dictionary = hq_utype.get("comms", {})
+		var comms_range_km: float = float(comms_data.get("range_km", 0))
+		var comms_range_hexes: float = comms_range_km / 0.5
+		# Calculate hex distance
+		var unit_pos := Vector2i(unit["col"], unit["row"])
+		var hq_pos := Vector2i(hq_unit["col"], hq_unit["row"])
+		var distance: int = _hex_distance(unit_pos, hq_pos)
+		unit["in_comms"] = float(distance) <= comms_range_hexes
+		# LOS check is independent of comms - within spotting range and can see HQ
+		var unit_spot: int = _get_effective_spotting_range(unit)
+		var unit_elev: int = elevation_grid[unit_pos.y][unit_pos.x]
+		unit["in_hq_los"] = distance <= unit_spot and _has_los(unit_pos, unit_elev, hq_pos)
+
+
+func _get_hq_order_modifier(unit: Dictionary) -> float:
+	if unit.get("in_hq_los", false):
+		return hq_los_order_buff
+	if unit.get("in_comms", false):
+		return hq_comms_order_buff
+	return 1.0
+
+
+func _get_hq_accuracy_modifier(unit: Dictionary) -> float:
+	if unit.get("in_hq_los", false):
+		return hq_los_accuracy_buff
+	return 1.0
+
+
+func _get_hq_suppression_modifier(unit: Dictionary) -> float:
+	if unit.get("in_hq_los", false):
+		return hq_los_suppression_resistance
+	return 1.0
 
 
 func _resolve_unit_combat(unit: Dictionary, minutes: float) -> void:
@@ -326,11 +467,12 @@ func _resolve_unit_combat(unit: Dictionary, minutes: float) -> void:
 		var shooter_elev: int = elevation_grid[unit_pos.y][unit_pos.x]
 		var target_elev_val: int = elevation_grid[target_pos.y][target_pos.x]
 		var elev_diff: int = shooter_elev - target_elev_val
+		var hq_acc: float = _get_hq_accuracy_modifier(unit)
 		var result := combat.resolve_combat(
 			unit, best_target, utype, target_type,
 			wi, rounds, best_dist,
 			is_moving, target_moving,
-			target_terrain, target_armor, is_suppressive, elev_diff)
+			target_terrain, target_armor, is_suppressive, elev_diff, hq_acc)
 
 		# Apply results
 		ammo_arr[wi] = current_ammo - rounds
@@ -338,7 +480,8 @@ func _resolve_unit_combat(unit: Dictionary, minutes: float) -> void:
 
 		if result["hits"] > 0 or result["suppression_added"] > 0:
 			var t_name: String = best_target.get("name", "?")
-			combat.apply_suppression(t_name, result["suppression_added"])
+			var supp_mod: float = _get_hq_suppression_modifier(best_target)
+			combat.apply_suppression(t_name, result["suppression_added"] * supp_mod)
 
 		if result["crew_killed"] > 0:
 			var t_crew: int = int(best_target.get("current_crew", 4))
@@ -405,12 +548,35 @@ func _resolve_unit_combat(unit: Dictionary, minutes: float) -> void:
 		_check_morale(unit)
 
 
+func _get_effective_spotting_range(unit: Dictionary) -> int:
+	var utype_code: String = unit.get("type_code", "")
+	var utype: Dictionary = unit_types.get(utype_code, {})
+	var base_range: int = int(utype.get("spotting_range", 4))
+	var unit_pos := Vector2i(unit["col"], unit["row"])
+	var unit_elev: int = elevation_grid[unit_pos.y][unit_pos.x]
+	# +1 hex spotting per elevation level above the lowest terrain at the edge of base range
+	# Simulates being able to see further into low ground from a hilltop
+	var min_elev_at_edge: int = unit_elev
+	for dc in range(-base_range, base_range + 1):
+		for dr in range(-base_range, base_range + 1):
+			var c := unit_pos.x + dc
+			var r := unit_pos.y + dr
+			if c >= 0 and c < map_cols and r >= 0 and r < map_rows:
+				var d := _hex_distance(unit_pos, Vector2i(c, r))
+				if d >= base_range - 1 and d <= base_range:
+					var e: int = elevation_grid[r][c]
+					if e < min_elev_at_edge:
+						min_elev_at_edge = e
+	var elev_bonus: int = maxi(0, unit_elev - min_elev_at_edge)
+	return base_range + elev_bonus
+
+
 func _find_targets_in_range(unit: Dictionary) -> Array:
 	var utype_code: String = unit.get("type_code", "")
 	var utype: Dictionary = unit_types.get(utype_code, {})
 	var unit_pos := Vector2i(unit["col"], unit["row"])
 	var unit_side: String = unit.get("side", "player")
-	var spot_range: int = int(utype.get("spotting_range", 4))
+	var spot_range: int = _get_effective_spotting_range(unit)
 	var unit_elev: int = elevation_grid[unit_pos.y][unit_pos.x]
 
 	var targets: Array = []
@@ -516,6 +682,8 @@ func _check_morale(unit: Dictionary) -> void:
 			elev_bonus = elev_advantage * 5  # +5 per level above, -5 per level below
 
 	var effective_morale: int = maxi(0, base_morale - penalty + elev_bonus)
+	if unit.get("in_hq_los", false):
+		effective_morale += hq_los_morale_buff
 	unit["current_morale"] = effective_morale
 
 	var status: String = unit.get("unit_status", "")
@@ -769,6 +937,84 @@ func _setup_unit_panel() -> void:
 	unit_panel.roe_changed.connect(_on_roe_changed)
 
 
+func _setup_display_bar() -> void:
+	display_bar = CanvasLayer.new()
+	display_bar.layer = 10
+	add_child(display_bar)
+
+	var panel := PanelContainer.new()
+	panel.mouse_filter = Control.MOUSE_FILTER_STOP
+
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.05, 0.05, 0.05, 0.92)
+	style.content_margin_left = 20.0
+	style.content_margin_right = 20.0
+	style.content_margin_top = 6.0
+	style.content_margin_bottom = 6.0
+	panel.add_theme_stylebox_override("panel", style)
+
+	var anchor := Control.new()
+	anchor.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+	anchor.offset_top = -36
+	anchor.offset_bottom = 0
+	display_bar.add_child(anchor)
+	anchor.add_child(panel)
+	panel.set_anchors_preset(Control.PRESET_FULL_RECT)
+
+	var hbox := HBoxContainer.new()
+	hbox.add_theme_constant_override("separation", 24)
+	hbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	panel.add_child(hbox)
+
+	var cb_los := CheckBox.new()
+	cb_los.text = "Line of Sight"
+	cb_los.button_pressed = true
+	cb_los.add_theme_font_size_override("font_size", 13)
+	cb_los.add_theme_color_override("font_color", Color(0.78, 0.8, 0.72))
+	cb_los.toggled.connect(func(pressed: bool) -> void: show_los = pressed; queue_redraw())
+	hbox.add_child(cb_los)
+
+	var cb_comms := CheckBox.new()
+	cb_comms.text = "Comms Range"
+	cb_comms.button_pressed = true
+	cb_comms.add_theme_font_size_override("font_size", 13)
+	cb_comms.add_theme_color_override("font_color", Color(0.78, 0.8, 0.72))
+	cb_comms.toggled.connect(func(pressed: bool) -> void: show_comms = pressed; queue_redraw())
+	hbox.add_child(cb_comms)
+
+	var cb_weapons := CheckBox.new()
+	cb_weapons.text = "Weapon Ranges"
+	cb_weapons.button_pressed = true
+	cb_weapons.add_theme_font_size_override("font_size", 13)
+	cb_weapons.add_theme_color_override("font_color", Color(0.78, 0.8, 0.72))
+	cb_weapons.toggled.connect(func(pressed: bool) -> void: show_weapon_ranges = pressed; queue_redraw())
+	hbox.add_child(cb_weapons)
+
+	var cb_units := CheckBox.new()
+	cb_units.text = "Units"
+	cb_units.button_pressed = true
+	cb_units.add_theme_font_size_override("font_size", 13)
+	cb_units.add_theme_color_override("font_color", Color(0.78, 0.8, 0.72))
+	cb_units.toggled.connect(func(pressed: bool) -> void: show_units = pressed; queue_redraw())
+	hbox.add_child(cb_units)
+
+	var cb_elev := CheckBox.new()
+	cb_elev.text = "Elevation"
+	cb_elev.button_pressed = false
+	cb_elev.add_theme_font_size_override("font_size", 13)
+	cb_elev.add_theme_color_override("font_color", Color(0.78, 0.8, 0.72))
+	cb_elev.toggled.connect(func(pressed: bool) -> void: show_elevation = pressed; queue_redraw())
+	hbox.add_child(cb_elev)
+
+	var cb_move := CheckBox.new()
+	cb_move.text = "Move Cost"
+	cb_move.button_pressed = false
+	cb_move.add_theme_font_size_override("font_size", 13)
+	cb_move.add_theme_color_override("font_color", Color(0.78, 0.8, 0.72))
+	cb_move.toggled.connect(func(pressed: bool) -> void: show_move_cost = pressed; queue_redraw())
+	hbox.add_child(cb_move)
+
+
 func _load_posture_configs() -> void:
 	var cfg := Config.new()
 	cfg.load_file("res://config/game.yaml")
@@ -804,6 +1050,78 @@ func _setup_game_flow() -> void:
 
 func _on_phase_changed(phase: String) -> void:
 	unit_panel.set_orders_phase(phase == "ORDERS")
+	if phase == "ORDERS":
+		_check_auto_continue()
+
+
+func _check_auto_continue() -> void:
+	var check_engaged := game_flow_panel.is_progress_until_engaged()
+	var check_orders := game_flow_panel.is_progress_until_orders()
+
+	if not check_engaged and not check_orders:
+		return
+
+	# Engaged check takes priority - stop immediately if anyone is in combat
+	if check_engaged:
+		var engaged_unit := _find_engaged_unit()
+		if not engaged_unit.is_empty():
+			_select_and_center_unit(engaged_unit)
+			return
+
+	# Then check if anyone needs orders
+	if check_orders:
+		var unit_needing_orders := _find_unit_needing_orders()
+		if not unit_needing_orders.is_empty():
+			_select_and_center_unit(unit_needing_orders)
+			return
+
+	# Nothing needs attention - keep going
+	game_clock.end_orders_phase()
+
+
+func _find_unit_needing_orders() -> Dictionary:
+	for unit in units:
+		if unit.get("side", "player") != "player":
+			continue
+		var status: String = unit.get("unit_status", "")
+		if status == "DESTROYED":
+			continue
+		var uname: String = unit.get("name", "")
+		var order: Order = order_manager.get_order(uname)
+		if order == null or order.status == Order.Status.COMPLETE or order.status == Order.Status.COUNTERMANDED:
+			# This unit has no active orders
+			var utype: Dictionary = unit_types.get(unit.get("type_code", ""), {})
+			if not utype.get("is_hq", false):
+				return unit
+	return {}
+
+
+func _find_engaged_unit() -> Dictionary:
+	for unit in units:
+		if unit.get("side", "player") != "player":
+			continue
+		var status: String = unit.get("unit_status", "")
+		if status == "DESTROYED":
+			continue
+		var uname: String = unit.get("name", "")
+		var supp: float = combat.get_suppression(uname)
+		if supp > 0:
+			return unit
+	return {}
+
+
+func _select_and_center_unit(unit: Dictionary) -> void:
+	var pos := Vector2i(unit["col"], unit["row"])
+	selected_hex = pos
+	selected_unit = unit
+	_calculate_los(unit)
+	# Center camera on unit
+	var viewport_size := get_viewport_rect().size
+	var pixel_pos := _hex_to_pixel(pos.x, pos.y)
+	camera_offset = pixel_pos * zoom_level - viewport_size * 0.5
+	_clamp_camera()
+	_update_info_label()
+	queue_redraw()
 
 
 func _on_posture_changed(unit_name: String, posture: Order.Posture) -> void:
@@ -831,14 +1149,16 @@ func _on_order_cleared(unit_name: String) -> void:
 
 
 func _on_time_advanced(minutes: float) -> void:
+	_update_hq_comms(minutes)
 	order_manager.update_orders(game_clock.game_time_minutes)
 	_move_units(minutes)
 	# Resolve combat for all units and decay suppression
 	for unit in units:
 		_resolve_unit_combat(unit, minutes)
 	combat.decay_suppression(minutes)
-	# Recover morale for units not under fire
+	# Update morale and recover for units not under fire
 	for unit in units:
+		_check_morale(unit)
 		_recover_morale(unit, minutes)
 	# Keep selection tracking the selected unit
 	if not selected_unit.is_empty():
@@ -1133,6 +1453,26 @@ func _draw() -> void:
 			_draw_hex_filled(center, scaled_size, color)
 			_draw_hex_detail(center, scaled_size, code)
 
+			# Hex overlay labels (elevation, movement)
+			if scaled_size > 10:
+				var font := ThemeDB.fallback_font
+				var label_size := int(clampf(scaled_size * 0.22, 7, 14))
+				if show_elevation:
+					var elev_text := str(elev)
+					var text_sz := font.get_string_size(elev_text, HORIZONTAL_ALIGNMENT_CENTER, -1, label_size)
+					var elev_pos := center + Vector2(-text_sz.x * 0.5, -scaled_size * 0.35)
+					draw_string(font, elev_pos + Vector2(1, 1), elev_text, HORIZONTAL_ALIGNMENT_LEFT, -1, label_size, Color(0, 0, 0, 0.5))
+					draw_string(font, elev_pos, elev_text, HORIZONTAL_ALIGNMENT_LEFT, -1, label_size, Color(1, 1, 1, 0.6))
+				if show_move_cost:
+					var spd_mod: float = 1.0
+					if code in terrain_types:
+						spd_mod = float(terrain_types[code].get("speed_modifier", 1.0))
+					var spd_text := "%d%%" % int(spd_mod * 100)
+					var text_sz := font.get_string_size(spd_text, HORIZONTAL_ALIGNMENT_CENTER, -1, label_size)
+					var spd_pos := center + Vector2(-text_sz.x * 0.5, scaled_size * 0.45)
+					draw_string(font, spd_pos + Vector2(1, 1), spd_text, HORIZONTAL_ALIGNMENT_LEFT, -1, label_size, Color(0, 0, 0, 0.5))
+					draw_string(font, spd_pos, spd_text, HORIZONTAL_ALIGNMENT_LEFT, -1, label_size, Color(1, 1, 1, 0.6))
+
 			# Outline
 			var outline_color := Color(0.3, 0.35, 0.25, 0.4)
 			if Vector2i(col, row) == selected_hex:
@@ -1143,7 +1483,7 @@ func _draw() -> void:
 			_draw_hex_outline(center, scaled_size, outline_color)
 
 	# Draw LOS overlay when a unit is selected
-	if not selected_unit.is_empty() and not los_visible.is_empty():
+	if show_los and not selected_unit.is_empty() and not los_visible.is_empty():
 		for col in range(min_col, max_col + 1):
 			for row in range(min_row, max_row + 1):
 				var coord := Vector2i(col, row)
@@ -1154,12 +1494,12 @@ func _draw() -> void:
 				else:
 					# Check if within spotting range but not visible
 					var unit_coord := Vector2i(selected_unit["col"], selected_unit["row"])
-					if _hex_distance(unit_coord, coord) <= unit_types[selected_unit["type_code"]]["spotting_range"]:
+					if _hex_distance(unit_coord, coord) <= _get_effective_spotting_range(selected_unit):
 						# In range but blocked: dim red
 						_draw_hex_filled(center, scaled_size * 0.92, Color(0.9, 0.2, 0.1, 0.15))
 
 	# Draw weapon range rings when a unit is selected
-	if not selected_unit.is_empty():
+	if (show_weapon_ranges or show_comms) and not selected_unit.is_empty():
 		var utype_code: String = selected_unit["type_code"]
 		if utype_code in unit_types:
 			var utype: Dictionary = unit_types[utype_code]
@@ -1180,6 +1520,8 @@ func _draw() -> void:
 			var is_moving := unit_order != null and unit_order.status == Order.Status.EXECUTING
 
 			for wi in range(weapons.size()):
+				if not show_weapon_ranges:
+					continue
 				var w: Dictionary = weapons[wi]
 				var range_static: float = float(w.get("range_km", 0))
 				var range_moving: float = float(w.get("range_moving_km", range_static * 0.3))
@@ -1226,6 +1568,32 @@ func _draw() -> void:
 					var label_pos := unit_screen + Vector2(ring_radius + 4, -font_size * 0.5 - wi * (font_size + 4))
 					draw_string(font, label_pos + Vector2(1, 1), label_text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color(0, 0, 0, 0.6))
 					draw_string(font, label_pos, label_text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, ring_color)
+
+			# Draw comms range ring for HQ units
+			var comms_data = utype.get("comms", {})
+			if show_comms and not comms_data.is_empty():
+				var comms_range_km: float = float(comms_data.get("range_km", 0))
+				var comms_hexes: float = comms_range_km / 0.5
+				var comms_radius := comms_hexes * hex_height * zoom_level
+				var comms_color := Color(0.2, 0.8, 0.8, 0.3)  # cyan/teal
+				var comms_line_w := maxf(3.5, scaled_size * 0.12)
+				var comms_segments := 48
+				# Draw dashed ring
+				for i in range(comms_segments):
+					if i % 2 == 0:
+						var a0 := deg_to_rad(float(i) / comms_segments * 360.0)
+						var a1 := deg_to_rad(float(i + 1) / comms_segments * 360.0)
+						var p0 := unit_screen + Vector2(cos(a0), sin(a0)) * comms_radius
+						var p1 := unit_screen + Vector2(cos(a1), sin(a1)) * comms_radius
+						draw_line(p0, p1, comms_color, comms_line_w)
+				# Label
+				if scaled_size > 10:
+					var comms_font := ThemeDB.fallback_font
+					var comms_label := "%s (%.0fkm)" % [comms_data.get("name", "Radio"), comms_range_km]
+					var comms_font_size := int(clampf(scaled_size * 0.18, 8, 13))
+					var comms_label_pos := unit_screen + Vector2(comms_radius + 4, comms_font_size * 0.5 + weapons.size() * (comms_font_size + 4))
+					draw_string(comms_font, comms_label_pos + Vector2(1, 1), comms_label, HORIZONTAL_ALIGNMENT_LEFT, -1, comms_font_size, Color(0, 0, 0, 0.6))
+					draw_string(comms_font, comms_label_pos, comms_label, HORIZONTAL_ALIGNMENT_LEFT, -1, comms_font_size, comms_color)
 
 	# Draw order waypoint lines and markers
 	for unit in units:
@@ -1288,14 +1656,15 @@ func _draw() -> void:
 			prev_screen = wp_screen
 
 	# Draw units on top
-	for unit in units:
-		var uc: int = unit["col"]
-		var ur: int = unit["row"]
-		if uc >= min_col and uc <= max_col and ur >= min_row and ur <= max_row:
-			var center := (_hex_to_pixel(uc, ur) - camera_offset / zoom_level) * zoom_level
-			var type_code: String = unit["type_code"]
-			if type_code in unit_types:
-				_draw_unit_counter(center, scaled_size, unit_types[type_code], unit["name"], unit.get("side", "player"))
+	if show_units:
+		for unit in units:
+			var uc: int = unit["col"]
+			var ur: int = unit["row"]
+			if uc >= min_col and uc <= max_col and ur >= min_row and ur <= max_row:
+				var center := (_hex_to_pixel(uc, ur) - camera_offset / zoom_level) * zoom_level
+				var type_code: String = unit["type_code"]
+				if type_code in unit_types:
+					_draw_unit_counter(center, scaled_size, unit_types[type_code], unit["name"], unit.get("side", "player"))
 
 	# Draw fire effects - red lines from shooter to target, flash on hit
 	for effect in fire_effects:
@@ -1480,6 +1849,15 @@ func _draw_unit_counter(center: Vector2, hex_sz: float, utype: Dictionary, uname
 				draw_line(wprev, wnext, sym_color, line_w)
 				wprev = wnext
 
+	# HQ text overlay
+	if utype.get("is_hq", false) and hex_sz > 12:
+		var hq_font := ThemeDB.fallback_font
+		var hq_font_size := int(clampf(hex_sz * 0.25, 8, 16))
+		var hq_text := "HQ"
+		var hq_text_size := hq_font.get_string_size(hq_text, HORIZONTAL_ALIGNMENT_CENTER, -1, hq_font_size)
+		var hq_pos := center + Vector2(-hq_text_size.x * 0.5, hq_font_size * 0.35)
+		draw_string(hq_font, hq_pos, hq_text, HORIZONTAL_ALIGNMENT_LEFT, -1, hq_font_size, Color(1, 1, 1, 0.9))
+
 	# Unit name below counter
 	if hex_sz > 15:
 		var font := ThemeDB.fallback_font
@@ -1509,8 +1887,7 @@ func _calculate_los(unit: Dictionary) -> void:
 	los_visible.clear()
 	var uc: int = unit["col"]
 	var ur: int = unit["row"]
-	var type_code: String = unit["type_code"]
-	var spot_range: int = unit_types[type_code]["spotting_range"] if type_code in unit_types else 4
+	var spot_range: int = _get_effective_spotting_range(unit)
 	var origin := Vector2i(uc, ur)
 	var origin_elev: int = elevation_grid[ur][uc]
 
@@ -1749,9 +2126,16 @@ func _handle_move_order(screen_pos: Vector2) -> void:
 	var utype_code: String = selected_unit["type_code"]
 	var utype: Dictionary = unit_types.get(utype_code, {})
 
+	var is_hq: bool = utype.get("is_hq", false)
+	if not is_hq and not selected_unit.get("in_comms", false):
+		return  # Can't receive orders when out of comms
+	if float(selected_unit.get("hq_switch_remaining", 0.0)) > 0:
+		return  # Switching HQ, can't receive orders
+
+	var hq_mod: float = _get_hq_order_modifier(selected_unit)
 	var order := order_manager.issue_order(
 		selected_unit, utype, Order.Type.MOVE, target,
-		game_clock.game_time_minutes, current_posture, current_roe)
+		game_clock.game_time_minutes, current_posture, current_roe, hq_mod)
 
 	_update_info_label()
 	queue_redraw()

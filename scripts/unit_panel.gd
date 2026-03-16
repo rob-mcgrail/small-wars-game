@@ -15,6 +15,10 @@ var armor_label: Label
 var concealment_label: Label
 var spotting_label: Label
 
+# HQ/Command section
+var hq_label: Label
+var hq_status_label: Label
+
 # Orders section
 var order_status_label: Label
 var order_type_label: Label
@@ -116,6 +120,16 @@ func _ready() -> void:
 
 	status_label = _make_label()
 	vbox.add_child(status_label)
+
+	# Command section
+	vbox.add_child(_make_sep())
+	vbox.add_child(_make_header("COMMAND"))
+	vbox.add_child(_make_sep())
+
+	hq_label = _make_label()
+	vbox.add_child(hq_label)
+	hq_status_label = _make_detail_label()
+	vbox.add_child(hq_status_label)
 
 	# Protection section
 	vbox.add_child(_make_sep())
@@ -324,6 +338,51 @@ func show_unit(unit: Dictionary, utype: Dictionary, order: Order = null, game_ti
 		status_label.text = ""
 		status_label.visible = false
 
+	# HQ / Command display
+	var is_hq: bool = utype.get("is_hq", false)
+	var assigned_hq: String = unit.get("assigned_hq", "")
+	var in_comms: bool = unit.get("in_comms", false)
+	var in_los: bool = unit.get("in_hq_los", false)
+	var switching: float = float(unit.get("hq_switch_remaining", 0.0))
+
+	if is_hq:
+		var hq_lvl: int = int(utype.get("hq_level", 1))
+		if hq_lvl == 1:
+			hq_label.text = "Role: Battalion HQ"
+		else:
+			hq_label.text = "Role: Company HQ"
+		hq_label.add_theme_color_override("font_color", Color(0.5, 0.85, 0.5))
+		if assigned_hq != "":
+			hq_status_label.text = "Reports to: %s" % assigned_hq
+			hq_status_label.visible = true
+		else:
+			hq_status_label.text = "Top command"
+			hq_status_label.visible = true
+	elif switching > 0:
+		hq_label.text = "Switching HQ..."
+		hq_label.add_theme_color_override("font_color", Color(0.85, 0.85, 0.2))
+		hq_status_label.text = "%.0f min remaining" % switching
+		hq_status_label.visible = true
+	elif assigned_hq == "":
+		hq_label.text = "HQ: Unassigned"
+		hq_label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.5))
+		hq_status_label.visible = false
+	elif not in_comms:
+		hq_label.text = "OUT OF COMMUNICATIONS"
+		hq_label.add_theme_color_override("font_color", Color(0.9, 0.25, 0.2))
+		hq_status_label.text = "HQ: %s (out of range)" % assigned_hq
+		hq_status_label.visible = true
+	elif in_los:
+		hq_label.text = "HQ: %s" % assigned_hq
+		hq_label.add_theme_color_override("font_color", Color(0.3, 0.85, 0.3))
+		hq_status_label.text = "In LOS - full command link"
+		hq_status_label.visible = true
+	else:
+		hq_label.text = "HQ: %s" % assigned_hq
+		hq_label.add_theme_color_override("font_color", Color(0.82, 0.84, 0.78))
+		hq_status_label.text = "Radio contact"
+		hq_status_label.visible = true
+
 	var armor_val: int = utype.get("armor", 0)
 	var armor_desc := "none"
 	if armor_val >= 7:
@@ -439,6 +498,8 @@ func show_unit(unit: Dictionary, utype: Dictionary, order: Order = null, game_ti
 
 	# Add weapon entries with current ammo
 	var weapons = utype.get("weapons", [])
+	if not (weapons is Array):
+		weapons = []
 	var current_ammo: Array = unit.get("current_ammo", [])
 	for wi in range(weapons.size()):
 		var w: Dictionary = weapons[wi]

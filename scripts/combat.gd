@@ -30,7 +30,8 @@ func resolve_combat(shooter: Dictionary, target: Dictionary,
 		weapon_index: int, rounds_fired: int,
 		distance_hexes: int, shooter_moving: bool, target_moving: bool,
 		target_terrain: String, target_armor: int,
-		is_suppressive: bool = false, elevation_diff: int = 0) -> Dictionary:
+		is_suppressive: bool = false, elevation_diff: int = 0,
+		accuracy_modifier: float = 1.0) -> Dictionary:
 	## Returns {hits: int, crew_killed: int, vehicle_damage: float, suppression_added: float}
 
 	var result := {
@@ -102,7 +103,7 @@ func resolve_combat(shooter: Dictionary, target: Dictionary,
 	var platform_accuracy: float = float(weapon.get("platform_accuracy", 1.0))
 
 	# Final hit probability per round
-	var hit_chance: float = base_accuracy * range_factor * move_penalty * cover_factor * suppression_factor * suppressive_penalty * platform_accuracy
+	var hit_chance: float = base_accuracy * range_factor * move_penalty * cover_factor * suppression_factor * suppressive_penalty * platform_accuracy * accuracy_modifier
 	hit_chance = clampf(hit_chance, 0.001, 0.8)  # floor and ceiling
 
 	# Resolve each shot

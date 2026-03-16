@@ -74,3 +74,14 @@ postures:
     # Pathfinding: favour cover (woods, towns), avoid open ground
     road_preference: 0.5
     cover_preference: 3.0
+
+# HQ command hierarchy
+hq:
+  switching_cost_minutes: 15
+  # Buff to order processing time when in comms with HQ
+  comms_order_buff: 0.8
+  # Buff when in LOS of HQ (replaces comms buff)
+  los_order_buff: 0.6
+  los_morale_buff: 5
+  los_accuracy_buff: 1.1
+  los_suppression_resistance: 0.85

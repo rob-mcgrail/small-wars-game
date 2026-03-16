@@ -158,6 +158,10 @@ static func _parse_scalar(text: String) -> Variant:
 		return false
 	if text == "null" or text == "~":
 		return null
+	if text == "[]":
+		return []
+	if text == "{}":
+		return {}
 
 	# Remove quotes
 	if (text.begins_with("\"") and text.ends_with("\"")) or \

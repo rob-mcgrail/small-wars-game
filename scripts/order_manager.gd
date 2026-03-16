@@ -38,7 +38,7 @@ func _ready() -> void:
 
 func issue_order(unit: Dictionary, unit_type: Dictionary, order_type: Order.Type,
 		target: Vector2i, current_time: float, posture: Order.Posture = Order.Posture.NORMAL,
-		roe: Order.ROE = Order.ROE.RETURN_FIRE) -> Order:
+		roe: Order.ROE = Order.ROE.RETURN_FIRE, hq_modifier: float = 1.0) -> Order:
 	var unit_name: String = unit.get("name", "?")
 	var training: String = str(unit_type.get("training", "regular"))
 
@@ -72,7 +72,7 @@ func issue_order(unit: Dictionary, unit_type: Dictionary, order_type: Order.Type
 
 	# Calculate staff formulation time
 	var staff_mod: float = staff_training_modifiers.get(training, 1.0)
-	order.formulation_time = staff_base_minutes * staff_mod
+	order.formulation_time = staff_base_minutes * staff_mod * hq_modifier
 	if countermanding:
 		order.formulation_time *= staff_countermand_penalty
 
@@ -80,7 +80,7 @@ func issue_order(unit: Dictionary, unit_type: Dictionary, order_type: Order.Type
 	var prep_mod: float = unit_prep_training_modifiers.get(training, 1.0)
 	var order_type_str := Order.type_to_string(order_type)
 	var order_mod: float = unit_prep_order_modifiers.get(order_type_str, 1.0)
-	order.preparation_time = unit_prep_base_minutes * prep_mod * order_mod
+	order.preparation_time = unit_prep_base_minutes * prep_mod * order_mod * hq_modifier
 
 	active_orders[unit_name] = order
 

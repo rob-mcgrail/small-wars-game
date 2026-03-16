@@ -20,6 +20,10 @@ unit_types:
     armor: 0
     concealment: 2
 
+    optics:
+      name: "Eyesight"
+      range_km: 2.0
+
     # Weapon systems
     # range_km: effective range when stationary
     # range_moving_km: effective range while moving (drive-by / suppression)
@@ -47,6 +51,84 @@ unit_types:
         vs_armor: 0
         ammo: 900
         platform_accuracy: 0.7   # handheld, but firing from a vehicle
+
+  - name: Battalion HQ
+    code: BHQ
+    description: "Toyota Hilux command vehicle with radios"
+    icon_color: "#5a8a4a"
+    symbol: wheeled
+    speed_kmh: 70
+    amphibious: false
+    spotting_range: 6
+    is_hq: true
+    hq_level: 1
+
+    crew: 3
+    training: militia
+    morale: 60
+    morale_recovery_per_min: 1.5
+
+    armor: 0
+    concealment: 2
+
+    optics:
+      name: "Binoculars 10x50"
+      range_km: 3.0
+
+    comms:
+      name: "Motorola HF Radio"
+      range_km: 9.0
+
+    weapons:
+      - name: "AK-47s (crew)"
+        type: rifle
+        range_km: 0.5
+        range_moving_km: 0.1
+        suppressive_range_km: 0.8
+        rate_of_fire: 80
+        vs_soft: 3
+        vs_armor: 0
+        ammo: 600
+        platform_accuracy: 0.7
+
+  - name: Company HQ
+    code: SHQ
+    description: "Toyota Hilux company command vehicle"
+    icon_color: "#4a7a5a"
+    symbol: wheeled
+    speed_kmh: 70
+    amphibious: false
+    spotting_range: 6
+    is_hq: true
+    hq_level: 2
+
+    crew: 3
+    training: militia
+    morale: 55
+    morale_recovery_per_min: 1.2
+
+    armor: 0
+    concealment: 2
+
+    optics:
+      name: "Binoculars 7x50"
+      range_km: 3.0
+
+    comms:
+      name: "Motorola VHF Radio"
+      range_km: 6.0
+
+    weapons:
+      - name: "AK-47s (crew)"
+        type: rifle
+        range_km: 0.5
+        range_moving_km: 0.1
+        suppressive_range_km: 0.8
+        rate_of_fire: 80
+        vs_soft: 3
+        vs_armor: 0
+        ammo: 600
+        platform_accuracy: 0.7
 
 # Training levels: militia, irregular, regular, veteran, elite
 # Morale: 1-100 (1 = will break immediately, 100 = fanatical)
