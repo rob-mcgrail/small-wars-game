@@ -21,6 +21,7 @@ var hq_status_label: Label
 
 # Orders section
 var order_status_label: Label
+var order_mode_label: Label
 var order_type_label: Label
 var order_timing_label: Label
 var order_detail_label: Label
@@ -29,12 +30,15 @@ var posture_container: HBoxContainer
 var posture_buttons: Array[Button] = []
 var roe_container: HBoxContainer
 var roe_buttons: Array[Button] = []
+var pursuit_container: HBoxContainer
+var pursuit_buttons: Array[Button] = []
 var waypoint_labels: Array[Control] = []
 
 # Weapons section
 signal order_cleared(unit_name: String)
 signal posture_changed(unit_name: String, posture: Order.Posture)
 signal roe_changed(unit_name: String, roe: Order.ROE)
+signal pursuit_changed(unit_name: String, pursuit: Order.Pursuit)
 
 var _current_unit_name: String = ""
 var _is_orders_phase: bool = true
@@ -75,9 +79,9 @@ func _ready() -> void:
 	var anchor := Control.new()
 	anchor.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
 	anchor.offset_left = 6
-	anchor.offset_top = -500
+	anchor.offset_top = -600
 	anchor.offset_right = 300
-	anchor.offset_bottom = -6
+	anchor.offset_bottom = -162
 	anchor.grow_horizontal = Control.GROW_DIRECTION_END
 	anchor.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	add_child(anchor)
@@ -153,6 +157,10 @@ func _ready() -> void:
 	order_status_label = _make_label()
 	vbox.add_child(order_status_label)
 
+	order_mode_label = _make_label()
+	order_mode_label.add_theme_font_size_override("font_size", 15)
+	vbox.add_child(order_mode_label)
+
 	order_type_label = _make_label()
 	vbox.add_child(order_type_label)
 
@@ -225,6 +233,38 @@ func _ready() -> void:
 		roe_buttons.append(btn)
 
 	roe_container.visible = false
+
+	# Pursuit buttons
+	pursuit_container = HBoxContainer.new()
+	pursuit_container.add_theme_constant_override("separation", 4)
+	vbox.add_child(pursuit_container)
+
+	for p in ["HOLD", "SHADOW", "PRESS"]:
+		var btn := Button.new()
+		btn.text = p
+		btn.custom_minimum_size = Vector2(0, 24)
+		btn.add_theme_font_size_override("font_size", 11)
+		btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var btn_style := StyleBoxFlat.new()
+		btn_style.bg_color = Color(0.2, 0.2, 0.25, 0.8)
+		btn_style.border_color = Color(0.4, 0.35, 0.5, 0.5)
+		btn_style.border_width_top = 1
+		btn_style.border_width_left = 1
+		btn_style.border_width_right = 1
+		btn_style.border_width_bottom = 1
+		btn_style.corner_radius_top_left = 2
+		btn_style.corner_radius_top_right = 2
+		btn_style.corner_radius_bottom_left = 2
+		btn_style.corner_radius_bottom_right = 2
+		btn.add_theme_stylebox_override("normal", btn_style)
+		var btn_hover := btn_style.duplicate()
+		btn_hover.bg_color = Color(0.3, 0.25, 0.4, 0.9)
+		btn.add_theme_stylebox_override("hover", btn_hover)
+		btn.pressed.connect(_on_pursuit_pressed.bind(p))
+		pursuit_container.add_child(btn)
+		pursuit_buttons.append(btn)
+
+	pursuit_container.visible = false
 
 	order_timing_label = _make_detail_label()
 	vbox.add_child(order_timing_label)
@@ -394,7 +434,21 @@ func show_unit(unit: Dictionary, utype: Dictionary, order: Order = null, game_ti
 	armor_label.text = "Armor:    %s" % armor_desc
 
 	concealment_label.text = "Conceal:  %d/10" % utype.get("concealment", 0)
-	spotting_label.text = "Spotting: %d hexes" % utype.get("spotting_range", 0)
+
+	# Optics and comms
+	var optics = utype.get("optics", {})
+	if optics is Dictionary and not optics.is_empty():
+		var optics_name: String = str(optics.get("name", "Eyesight"))
+		var optics_range: float = float(optics.get("range_km", 2.0))
+		spotting_label.text = "Optics:   %s (%.1fkm)" % [optics_name, optics_range]
+	else:
+		spotting_label.text = "Optics:   Eyesight (2.0km)"
+
+	var comms_data = utype.get("comms", {})
+	if comms_data is Dictionary and not comms_data.is_empty():
+		var comms_name: String = str(comms_data.get("name", "Radio"))
+		var comms_range: float = float(comms_data.get("range_km", 0))
+		spotting_label.text += "\nComms:    %s (%.0fkm)" % [comms_name, comms_range]
 
 	# Orders section
 	if order != null:
@@ -413,6 +467,19 @@ func show_unit(unit: Dictionary, utype: Dictionary, order: Order = null, game_ti
 
 		order_status_label.text = "Status:  %s" % order.status_string()
 		order_status_label.add_theme_color_override("font_color", order_color)
+
+		# Current mode summary
+		var posture_str := Order.posture_to_string(order.posture).to_upper()
+		var roe_str := Order.roe_to_string(order.roe).to_upper()
+		var pursuit_str := Order.pursuit_to_string(order.pursuit).to_upper()
+		order_mode_label.text = "%s  |  %s  |  %s" % [posture_str, roe_str, pursuit_str]
+		var mode_color := Color(0.82, 0.84, 0.78)
+		match order.posture:
+			Order.Posture.FAST: mode_color = Color(0.9, 0.6, 0.3)
+			Order.Posture.CAUTIOUS: mode_color = Color(0.5, 0.7, 0.9)
+		order_mode_label.add_theme_color_override("font_color", mode_color)
+		order_mode_label.visible = true
+
 		order_type_label.text = "Order:   %s" % Order.type_to_string(order.type).to_upper()
 		order_type_label.visible = true
 
@@ -422,9 +489,11 @@ func show_unit(unit: Dictionary, utype: Dictionary, order: Order = null, game_ti
 			order.status != Order.Status.COMPLETE
 		posture_container.visible = can_change
 		roe_container.visible = can_change
+		pursuit_container.visible = can_change
 		if can_change:
 			_highlight_posture_button(order.posture)
 			_highlight_roe_button(order.roe)
+			_highlight_pursuit_button(order.pursuit)
 
 		var remaining := order.time_until_execution(game_time)
 		if remaining > 0:
@@ -459,10 +528,14 @@ func show_unit(unit: Dictionary, utype: Dictionary, order: Order = null, game_ti
 				Order.ROE.RETURN_FIRE: roe_short = "RTN"
 				Order.ROE.FIRE_AT_WILL: roe_short = "FAW"
 				Order.ROE.HALT_AND_ENGAGE: roe_short = "H&E"
-			wp_label.text = " %s %d. (%d,%d) %s %s" % [
+			var wp_pursuit: Order.Pursuit = wp.get("pursuit", Order.Pursuit.HOLD)
+			var pursuit_short := ""
+			if wp_pursuit != Order.Pursuit.HOLD:
+				pursuit_short = " " + Order.pursuit_to_string(wp_pursuit).to_upper()
+			wp_label.text = " %s %d. (%d,%d) %s %s%s" % [
 				marker, wi + 1, wp_hex.x, wp_hex.y,
 				Order.posture_to_string(wp_posture).to_upper(),
-				roe_short]
+				roe_short, pursuit_short]
 			if wi < order.current_waypoint_index:
 				wp_label.add_theme_color_override("font_color", Color(0.4, 0.42, 0.38))
 			elif wi == order.current_waypoint_index:
@@ -477,8 +550,12 @@ func show_unit(unit: Dictionary, utype: Dictionary, order: Order = null, game_ti
 			order.status != Order.Status.EXECUTING and \
 			order.status != Order.Status.COMPLETE
 	else:
-		order_status_label.text = "No orders"
+		order_status_label.text = "Holding position"
 		order_status_label.add_theme_color_override("font_color", Color(0.5, 0.55, 0.45))
+		var default_roe: String = unit.get("default_roe", "return fire")
+		order_mode_label.text = "STATIONARY  |  %s" % default_roe.to_upper()
+		order_mode_label.add_theme_color_override("font_color", Color(0.6, 0.62, 0.55))
+		order_mode_label.visible = true
 		order_type_label.text = ""
 		order_type_label.visible = false
 		order_timing_label.text = ""
@@ -488,6 +565,7 @@ func show_unit(unit: Dictionary, utype: Dictionary, order: Order = null, game_ti
 		clear_order_button.visible = false
 		posture_container.visible = false
 		roe_container.visible = false
+		pursuit_container.visible = false
 		_clear_waypoint_labels()
 
 	# Clear old weapon labels
@@ -568,6 +646,52 @@ func _clear_waypoint_labels() -> void:
 func _on_clear_order_pressed() -> void:
 	if _current_unit_name != "":
 		order_cleared.emit(_current_unit_name)
+
+
+func _on_pursuit_pressed(pursuit_name: String) -> void:
+	if _current_unit_name == "":
+		return
+	var p := Order.Pursuit.HOLD
+	match pursuit_name:
+		"SHADOW": p = Order.Pursuit.SHADOW
+		"PRESS": p = Order.Pursuit.PRESS
+	_highlight_pursuit_button(p)
+	pursuit_changed.emit(_current_unit_name, p)
+
+
+func _highlight_pursuit_button(p: Order.Pursuit) -> void:
+	var active_idx := 0
+	match p:
+		Order.Pursuit.SHADOW: active_idx = 1
+		Order.Pursuit.PRESS: active_idx = 2
+	for i in range(pursuit_buttons.size()):
+		var btn := pursuit_buttons[i]
+		if i == active_idx:
+			var active_style := StyleBoxFlat.new()
+			active_style.bg_color = Color(0.45, 0.2, 0.6, 0.9)
+			active_style.border_color = Color(0.7, 0.3, 0.9)
+			active_style.border_width_top = 1
+			active_style.border_width_left = 1
+			active_style.border_width_right = 1
+			active_style.border_width_bottom = 1
+			active_style.corner_radius_top_left = 2
+			active_style.corner_radius_top_right = 2
+			active_style.corner_radius_bottom_left = 2
+			active_style.corner_radius_bottom_right = 2
+			btn.add_theme_stylebox_override("normal", active_style)
+		else:
+			var inactive_style := StyleBoxFlat.new()
+			inactive_style.bg_color = Color(0.2, 0.2, 0.25, 0.8)
+			inactive_style.border_color = Color(0.4, 0.35, 0.5, 0.5)
+			inactive_style.border_width_top = 1
+			inactive_style.border_width_left = 1
+			inactive_style.border_width_right = 1
+			inactive_style.border_width_bottom = 1
+			inactive_style.corner_radius_top_left = 2
+			inactive_style.corner_radius_top_right = 2
+			inactive_style.corner_radius_bottom_left = 2
+			inactive_style.corner_radius_bottom_right = 2
+			btn.add_theme_stylebox_override("normal", inactive_style)
 
 
 func _on_roe_pressed(roe_name: String) -> void:

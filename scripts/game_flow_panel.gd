@@ -5,14 +5,19 @@ signal auto_continue_changed(mode: String)
 
 var panel: PanelContainer
 var time_label: Label
+var daynight_label: Label
 var phase_label: Label
 var next_orders_label: Label
 var cycle_label: Label
 var action_button: Button
 var continue_complete_cb: CheckBox
 var continue_engaged_cb: CheckBox
+var ooda_cycles_passed: int = 0
+var can_interrupt: bool = false
 
 var game_clock: GameClock
+var sunrise: int = 6
+var sunset: int = 19
 
 
 func _init() -> void:
@@ -64,6 +69,13 @@ func _ready() -> void:
 	time_label.text = "06:00"
 	vbox.add_child(time_label)
 
+	# Day/night indicator
+	daynight_label = Label.new()
+	daynight_label.add_theme_font_size_override("font_size", 13)
+	daynight_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	daynight_label.text = ""
+	vbox.add_child(daynight_label)
+
 	# Phase indicator
 	phase_label = Label.new()
 	phase_label.add_theme_font_size_override("font_size", 14)
@@ -82,6 +94,7 @@ func _ready() -> void:
 	cycle_label.add_theme_color_override("font_color", Color(0.55, 0.58, 0.5))
 	cycle_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	cycle_label.text = "OODA cycle: 15 min"
+	cycle_label.mouse_filter = Control.MOUSE_FILTER_STOP
 	vbox.add_child(cycle_label)
 
 	# Next orders phase
@@ -122,6 +135,12 @@ func _ready() -> void:
 	var btn_pressed := btn_style.duplicate()
 	btn_pressed.bg_color = Color(0.2, 0.28, 0.15, 0.9)
 	action_button.add_theme_stylebox_override("pressed", btn_pressed)
+
+	var btn_disabled := btn_style.duplicate()
+	btn_disabled.bg_color = Color(0.15, 0.15, 0.15, 0.7)
+	btn_disabled.border_color = Color(0.25, 0.25, 0.25, 0.4)
+	action_button.add_theme_stylebox_override("disabled", btn_disabled)
+	action_button.add_theme_color_override("font_disabled_color", Color(0.4, 0.4, 0.4))
 
 	action_button.pressed.connect(_on_action_pressed)
 	vbox.add_child(action_button)
@@ -166,6 +185,15 @@ func _process(_delta: float) -> void:
 
 	time_label.text = game_clock.get_time_string()
 
+	# Day/night indicator
+	var hour: int = (int(game_clock.game_time_minutes) / 60) % 24
+	if hour < sunrise or hour >= sunset:
+		daynight_label.text = "NIGHT"
+		daynight_label.add_theme_color_override("font_color", Color(0.4, 0.45, 0.7))
+	else:
+		daynight_label.text = "DAY"
+		daynight_label.add_theme_color_override("font_color", Color(0.9, 0.8, 0.3))
+
 	if game_clock.is_orders_phase():
 		next_orders_label.text = ""
 	else:
@@ -174,6 +202,8 @@ func _process(_delta: float) -> void:
 
 
 func _on_phase_changed(phase: String) -> void:
+	if phase == "ORDERS":
+		ooda_cycles_passed += 1
 	_update_phase_display(phase)
 
 
@@ -183,12 +213,80 @@ func _update_phase_display(phase: String) -> void:
 		phase_label.add_theme_color_override("font_color", Color(0.4, 0.85, 0.3))
 		action_button.text = "EXECUTE ORDERS"
 		action_button.disabled = false
+		can_interrupt = false
+		_set_button_style_green()
 	else:
 		phase_label.add_theme_color_override("font_color", Color(0.85, 0.65, 0.2))
 		action_button.text = "EXECUTING..."
 		action_button.disabled = true
+		can_interrupt = false
+		_set_button_style_disabled()
+
+
+func set_interruptable() -> void:
+	## Called by hex_map when auto-continue skips an orders phase
+	if not can_interrupt:
+		can_interrupt = true
+		action_button.text = "INTERRUPT"
+		action_button.disabled = false
+		_set_button_style_orange()
+
+
+func reset_ooda_count() -> void:
+	ooda_cycles_passed = 0
+	can_interrupt = false
+
+
+func _set_button_style_green() -> void:
+	var s := StyleBoxFlat.new()
+	s.bg_color = Color(0.25, 0.35, 0.2, 0.9)
+	s.border_color = Color(0.4, 0.55, 0.3)
+	s.border_width_top = 1; s.border_width_left = 1
+	s.border_width_right = 1; s.border_width_bottom = 1
+	s.corner_radius_top_left = 2; s.corner_radius_top_right = 2
+	s.corner_radius_bottom_left = 2; s.corner_radius_bottom_right = 2
+	s.content_margin_left = 8.0; s.content_margin_right = 8.0
+	s.content_margin_top = 4.0; s.content_margin_bottom = 4.0
+	action_button.add_theme_stylebox_override("normal", s)
+	action_button.add_theme_color_override("font_color", Color(0.9, 0.95, 0.85))
+
+
+func _set_button_style_orange() -> void:
+	var s := StyleBoxFlat.new()
+	s.bg_color = Color(0.45, 0.3, 0.1, 0.9)
+	s.border_color = Color(0.7, 0.5, 0.2)
+	s.border_width_top = 1; s.border_width_left = 1
+	s.border_width_right = 1; s.border_width_bottom = 1
+	s.corner_radius_top_left = 2; s.corner_radius_top_right = 2
+	s.corner_radius_bottom_left = 2; s.corner_radius_bottom_right = 2
+	s.content_margin_left = 8.0; s.content_margin_right = 8.0
+	s.content_margin_top = 4.0; s.content_margin_bottom = 4.0
+	action_button.add_theme_stylebox_override("normal", s)
+	action_button.add_theme_color_override("font_color", Color(1.0, 0.85, 0.4))
+	var h := s.duplicate()
+	h.bg_color = Color(0.55, 0.35, 0.12, 0.9)
+	action_button.add_theme_stylebox_override("hover", h)
+
+
+func _set_button_style_disabled() -> void:
+	var s := StyleBoxFlat.new()
+	s.bg_color = Color(0.15, 0.15, 0.15, 0.7)
+	s.border_color = Color(0.25, 0.25, 0.25, 0.4)
+	s.border_width_top = 1; s.border_width_left = 1
+	s.border_width_right = 1; s.border_width_bottom = 1
+	s.corner_radius_top_left = 2; s.corner_radius_top_right = 2
+	s.corner_radius_bottom_left = 2; s.corner_radius_bottom_right = 2
+	s.content_margin_left = 8.0; s.content_margin_right = 8.0
+	s.content_margin_top = 4.0; s.content_margin_bottom = 4.0
+	action_button.add_theme_stylebox_override("normal", s)
+
+
+signal execute_pressed()
+signal interrupt_pressed()
 
 
 func _on_action_pressed() -> void:
-	if game_clock and game_clock.is_orders_phase():
-		game_clock.end_orders_phase()
+	if can_interrupt:
+		interrupt_pressed.emit()
+	elif game_clock and game_clock.is_orders_phase():
+		execute_pressed.emit()

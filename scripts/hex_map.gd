@@ -35,6 +35,7 @@ var selected_unit: Dictionary = {}
 # Current movement posture and ROE for new orders
 var current_posture: Order.Posture = Order.Posture.NORMAL
 var current_roe: Order.ROE = Order.ROE.RETURN_FIRE
+var current_pursuit: Order.Pursuit = Order.Pursuit.HOLD
 
 # Cached posture configs
 var posture_configs: Dictionary = {}
@@ -52,10 +53,10 @@ const EDGE_SCROLL_MARGIN := 20.0
 const EDGE_SCROLL_SPEED := 300.0
 
 # ROE multipliers on weapon's rate_of_fire
-# e.g. a 600 RPM weapon on Fire at Will fires at 10% = 60 RPM
-const ROE_RATE_FIRE_AT_WILL: float = 0.10       # sustained suppressive fire
-const ROE_RATE_RETURN_FIRE: float = 0.03        # reactive bursts
-const ROE_RATE_HALT_AND_ENGAGE: float = 0.15    # heavy focused engagement
+# e.g. a 600 RPM DShK on Fire at Will fires at 3.5% = ~20 RPM (realistic burst fire)
+const ROE_RATE_FIRE_AT_WILL: float = 0.035      # sustained suppressive fire
+const ROE_RATE_RETURN_FIRE: float = 0.015       # reactive bursts
+const ROE_RATE_HALT_AND_ENGAGE: float = 0.05    # heavy focused engagement
 
 # Morale thresholds
 const MORALE_BREAK_THRESHOLD: int = 30
@@ -95,6 +96,39 @@ var hq_los_morale_buff: int = 5
 var hq_los_accuracy_buff: float = 1.1
 var hq_los_suppression_resistance: float = 0.85
 
+# OODA config
+var ooda_base_cycle: float = 15.0
+var ooda_min_cycle: float = 5.0
+var ooda_max_cycle: float = 45.0
+var ooda_training_modifiers: Dictionary = {}
+var ooda_hq_moving_penalty: float = 1.5
+var ooda_hq_suppressed_penalty: float = 2.0
+var ooda_hq_destroyed_penalty: float = 3.0
+var ooda_hq_crew_loss_per: float = 0.25
+
+# Night config
+var sunrise_hour: int = 6
+var sunset_hour: int = 19
+var night_ooda_penalty: float = 1.5
+var night_spotting_modifier: float = 0.3
+var night_accuracy_modifier: float = 0.4
+var night_range_modifier: float = 0.5
+
+# Destruction effects config
+var destruction_marker_duration: float = 60.0
+var destruction_direct_hq_shock: int = 15
+var destruction_parent_hq_shock: int = 8
+var destruction_los_witness_shock: int = 10
+
+# Death markers: Vector2i -> float (game time of death)
+var death_markers: Dictionary = {}
+
+# Fog of war
+var revealed_hexes: Dictionary = {}  # Vector2i -> true
+var spotted_enemies: Dictionary = {}  # unit name -> Vector2i (current spotted position)
+var last_seen_enemies: Dictionary = {}  # Vector2i -> float (game_time when enemy was last seen there)
+const LAST_SEEN_DURATION: float = 30.0  # minutes before last-seen marker fades
+
 # Visual combat effects
 # Array of {from: Vector2i, to: Vector2i, time_remaining: float, hit: bool}
 var fire_effects: Array = []
@@ -108,11 +142,10 @@ func _ready() -> void:
 	_load_hq_config()
 	_load_map()
 	_place_starting_units()
-	_setup_info_label()
 	_setup_hex_panel()
 	_setup_unit_panel()
 	_setup_game_flow()
-	_setup_display_bar()
+	_setup_display_bar()  # Also creates info_label
 	# Run one tick to initialize all systems (comms, morale, LOS, etc.)
 	_on_time_advanced(0.0)
 	# Select and center on Battalion HQ at start
@@ -137,6 +170,42 @@ func _load_hq_config() -> void:
 	hq_los_morale_buff = cfg.get_int("hq.los_morale_buff", 5)
 	hq_los_accuracy_buff = cfg.get_float("hq.los_accuracy_buff", 1.1)
 	hq_los_suppression_resistance = cfg.get_float("hq.los_suppression_resistance", 0.85)
+
+	# OODA config
+	ooda_base_cycle = cfg.get_float("ooda.base_cycle_minutes", 15.0)
+	ooda_min_cycle = cfg.get_float("ooda.min_cycle_minutes", 5.0)
+	ooda_max_cycle = cfg.get_float("ooda.max_cycle_minutes", 45.0)
+	var ooda_mods = cfg.get_value("ooda.training_modifier", {})
+	for key in ooda_mods:
+		ooda_training_modifiers[key] = float(ooda_mods[key])
+	ooda_hq_moving_penalty = cfg.get_float("ooda.hq_moving_penalty", 1.5)
+	ooda_hq_suppressed_penalty = cfg.get_float("ooda.hq_suppressed_penalty", 2.0)
+	ooda_hq_destroyed_penalty = cfg.get_float("ooda.hq_destroyed_penalty", 3.0)
+	ooda_hq_crew_loss_per = cfg.get_float("ooda.hq_crew_loss_penalty_per", 0.25)
+
+	# Night config
+	sunrise_hour = cfg.get_int("time.sunrise_hour", 6)
+	sunset_hour = cfg.get_int("time.sunset_hour", 19)
+	night_ooda_penalty = cfg.get_float("night.ooda_penalty", 1.5)
+	night_spotting_modifier = cfg.get_float("night.spotting_range_modifier", 0.3)
+	night_accuracy_modifier = cfg.get_float("night.accuracy_modifier", 0.4)
+	night_range_modifier = cfg.get_float("night.effective_range_modifier", 0.5)
+
+	# Destruction effects
+	destruction_marker_duration = cfg.get_float("destruction.marker_duration_minutes", 60.0)
+	destruction_direct_hq_shock = cfg.get_int("destruction.direct_hq_morale_shock", 15)
+	destruction_parent_hq_shock = cfg.get_int("destruction.parent_hq_morale_shock", 8)
+	destruction_los_witness_shock = cfg.get_int("destruction.los_witness_morale_shock", 10)
+
+
+func _is_night() -> bool:
+	var hour: int = (int(game_clock.game_time_minutes) / 60) % 24
+	return hour < sunrise_hour or hour >= sunset_hour
+
+
+func _unit_has_night_vision(unit: Dictionary) -> bool:
+	var utype: Dictionary = unit_types.get(unit.get("type_code", ""), {})
+	return utype.get("night_vision", false)
 
 
 func _load_terrain_types() -> void:
@@ -185,19 +254,45 @@ func _place_starting_units() -> void:
 		_init_unit_ammo_and_morale(unit_dict)
 		units.append(unit_dict)
 
-	# Place enemy technical ~8km (16 hexes) away
+	# Place player Technical 2 nearby
+	var player2_pos := _find_open_hex_near(center_col, center_row + 2)
+	if player2_pos != Vector2i(-1, -1):
+		var unit2_dict: Dictionary = {
+			"type_code": "TEC",
+			"col": player2_pos.x,
+			"row": player2_pos.y,
+			"name": "Technical 2",
+			"side": "player",
+		}
+		_init_unit_ammo_and_morale(unit2_dict)
+		units.append(unit2_dict)
+
+	# Place enemy technicals ~8km (16 hexes) away
 	var enemy_pos := _find_open_hex_near(center_col + 16, center_row)
 	if enemy_pos != Vector2i(-1, -1):
 		var enemy_dict: Dictionary = {
 			"type_code": "TEC",
 			"col": enemy_pos.x,
 			"row": enemy_pos.y,
-			"name": "Enemy Technical",
+			"name": "Enemy Technical 1",
 			"side": "enemy",
 			"default_roe": "fire at will",
 		}
 		_init_unit_ammo_and_morale(enemy_dict)
 		units.append(enemy_dict)
+
+	var enemy2_pos := _find_open_hex_near(center_col + 16, center_row + 2)
+	if enemy2_pos != Vector2i(-1, -1):
+		var enemy2_dict: Dictionary = {
+			"type_code": "TEC",
+			"col": enemy2_pos.x,
+			"row": enemy2_pos.y,
+			"name": "Enemy Technical 2",
+			"side": "enemy",
+			"default_roe": "fire at will",
+		}
+		_init_unit_ammo_and_morale(enemy2_dict)
+		units.append(enemy2_dict)
 
 	# Place Battalion HQ 6 hexes behind center
 	var bhq_pos := _find_open_hex_near(center_col - 6, center_row)
@@ -226,11 +321,10 @@ func _place_starting_units() -> void:
 		shq_dict["assigned_hq"] = "Battalion HQ"
 		units.append(shq_dict)
 
-	# Set Technical 1's assigned HQ
+	# Set technicals' assigned HQ
 	for u in units:
-		if u.get("name", "") == "Technical 1":
+		if u.get("name", "") == "Technical 1" or u.get("name", "") == "Technical 2":
 			u["assigned_hq"] = "Company HQ"
-			break
 
 
 func _find_open_hex_near(col: int, row: int) -> Vector2i:
@@ -260,6 +354,7 @@ func _init_unit_ammo_and_morale(unit: Dictionary) -> void:
 	unit["mobility_damage"] = 0.0  # 0.0 = fine, 1.0+ = IMMOBILISED
 	unit["unit_status"] = ""  # "", "BROKEN", "ROUTING", "DESTROYED", "IMMOBILISED"
 	unit["morale_recovery_accum"] = 0.0  # fractional morale recovery accumulator
+	unit["morale_damage"] = 0  # permanent morale reduction from trauma
 	unit["assigned_hq"] = ""
 	unit["in_comms"] = false
 	unit["in_hq_los"] = false
@@ -423,6 +518,10 @@ func _resolve_unit_combat(unit: Dictionary, minutes: float) -> void:
 		if is_moving:
 			w_range_km = float(w.get("range_moving_km", w_range_km * 0.3))
 			w_supp_range_km = w_range_km  # no suppressive bonus while moving
+		# Night reduces effective engagement ranges
+		if _is_night() and not _unit_has_night_vision(unit):
+			w_range_km *= night_range_modifier
+			w_supp_range_km *= night_range_modifier
 		# Max engagement range is the suppressive range
 		var w_max_range_hexes: float = w_supp_range_km / 0.5
 		var w_effective_range_hexes: float = w_range_km / 0.5
@@ -443,9 +542,19 @@ func _resolve_unit_combat(unit: Dictionary, minutes: float) -> void:
 			continue
 
 		# Calculate rounds fired this tick
-		# Weapon RoF * ROE multiplier * time * crew ratio
+		# Weapon RoF * ROE multiplier * time * crew ratio * conservation
 		var rof: float = float(w.get("rate_of_fire", 600))
-		var rounds_f: float = rof * roe_mult * minutes * crew_ratio
+		# Troops conserve ammo as it gets low
+		var max_ammo: int = 0
+		var w_weapons: Array = utype.get("weapons", [])
+		if wi < w_weapons.size():
+			max_ammo = int(w_weapons[wi].get("ammo", 0))
+		var ammo_pct: float = float(current_ammo) / maxf(1.0, float(max_ammo))
+		var conservation: float = 1.0
+		if ammo_pct < 0.5:
+			# Linear taper: at 50% fire at full rate, at 10% fire at 20%, at 0% don't fire
+			conservation = clampf(ammo_pct / 0.5, 0.2, 1.0)
+		var rounds_f: float = rof * roe_mult * minutes * crew_ratio * conservation
 		var rounds: int = int(rounds_f)
 		# Stochastic rounding for fractional rounds
 		if randf() < (rounds_f - float(rounds)):
@@ -468,11 +577,16 @@ func _resolve_unit_combat(unit: Dictionary, minutes: float) -> void:
 		var target_elev_val: int = elevation_grid[target_pos.y][target_pos.x]
 		var elev_diff: int = shooter_elev - target_elev_val
 		var hq_acc: float = _get_hq_accuracy_modifier(unit)
+		# Night penalty on accuracy
+		var night_acc: float = 1.0
+		if _is_night() and not _unit_has_night_vision(unit):
+			night_acc = night_accuracy_modifier
+		var total_acc: float = hq_acc * night_acc
 		var result := combat.resolve_combat(
 			unit, best_target, utype, target_type,
 			wi, rounds, best_dist,
 			is_moving, target_moving,
-			target_terrain, target_armor, is_suppressive, elev_diff, hq_acc)
+			target_terrain, target_armor, is_suppressive, elev_diff, total_acc)
 
 		# Apply results
 		ammo_arr[wi] = current_ammo - rounds
@@ -526,9 +640,11 @@ func _resolve_unit_combat(unit: Dictionary, minutes: float) -> void:
 		var t_crew_left: int = int(best_target.get("current_crew", 0))
 		var t_dmg: float = float(best_target.get("vehicle_damage", 0.0))
 		if t_crew_left <= 0 or t_dmg >= 1.0:
-			best_target["unit_status"] = "DESTROYED"
-			order_manager.cancel_order(best_target.get("name", ""))
-			combat.log_event("%s DESTROYED by %s" % [best_target.get("name", "?"), uname])
+			if best_target.get("unit_status", "") != "DESTROYED":
+				best_target["unit_status"] = "DESTROYED"
+				order_manager.cancel_order(best_target.get("name", ""))
+				combat.log_event("%s DESTROYED by %s" % [best_target.get("name", "?"), uname])
+				_on_unit_destroyed(best_target)
 
 		if rounds > 0:
 			# Create fire effect visual
@@ -568,7 +684,11 @@ func _get_effective_spotting_range(unit: Dictionary) -> int:
 					if e < min_elev_at_edge:
 						min_elev_at_edge = e
 	var elev_bonus: int = maxi(0, unit_elev - min_elev_at_edge)
-	return base_range + elev_bonus
+	var total := base_range + elev_bonus
+	# Night penalty
+	if _is_night() and not _unit_has_night_vision(unit):
+		total = maxi(1, int(float(total) * night_spotting_modifier))
+	return total
 
 
 func _find_targets_in_range(unit: Dictionary) -> Array:
@@ -613,19 +733,39 @@ func _get_lowest_ammo_pct(unit: Dictionary) -> float:
 
 func _get_ammo_morale_penalty(unit: Dictionary) -> int:
 	var ammo_arr: Array = unit.get("current_ammo", [])
-	# Check if ALL weapons are empty
+	var utype_code: String = unit.get("type_code", "")
+	var utype: Dictionary = unit_types.get(utype_code, {})
+	var weapons: Array = utype.get("weapons", [])
+	if not (weapons is Array) or weapons.is_empty():
+		return 0
+
+	# Use average ammo percentage across all weapons
+	var total_pct: float = 0.0
+	var count: int = 0
 	var all_empty: bool = true
-	for a in ammo_arr:
-		if int(a) > 0:
+	for i in range(ammo_arr.size()):
+		var max_ammo: int = 0
+		if i < weapons.size():
+			max_ammo = int(weapons[i].get("ammo", 0))
+		if max_ammo <= 0:
+			continue
+		var cur: int = int(ammo_arr[i])
+		if cur > 0:
 			all_empty = false
-			break
-	if all_empty and ammo_arr.size() > 0:
-		return 30
-	var lowest_pct: float = _get_lowest_ammo_pct(unit)
-	if lowest_pct < 0.25:
-		return 20
-	elif lowest_pct < 0.50:
+		total_pct += float(cur) / float(max_ammo)
+		count += 1
+
+	if all_empty and count > 0:
+		return 25
+	if count == 0:
+		return 0
+	var avg_pct: float = total_pct / float(count)
+	if avg_pct < 0.15:
+		return 15
+	elif avg_pct < 0.30:
 		return 10
+	elif avg_pct < 0.50:
+		return 5
 	return 0
 
 
@@ -633,7 +773,8 @@ func _check_morale(unit: Dictionary) -> void:
 	var utype_code: String = unit.get("type_code", "")
 	var utype: Dictionary = unit_types.get(utype_code, {})
 	var base_morale: int = int(utype.get("morale", 50))
-	var penalty: int = _get_ammo_morale_penalty(unit)
+	var morale_dmg: int = int(unit.get("morale_damage", 0))
+	var penalty: int = morale_dmg + _get_ammo_morale_penalty(unit)
 
 	# Mobility damage penalty - being immobilised in a technical is terrifying
 	var mob_dmg: float = float(unit.get("mobility_damage", 0.0))
@@ -687,7 +828,7 @@ func _check_morale(unit: Dictionary) -> void:
 	unit["current_morale"] = effective_morale
 
 	var status: String = unit.get("unit_status", "")
-	if status == "DESTROYED":
+	if status == "DESTROYED" or status == "IMMOBILISED":
 		return
 	if effective_morale < MORALE_ROUT_THRESHOLD and status != "ROUTING":
 		unit["unit_status"] = "ROUTING"
@@ -697,6 +838,173 @@ func _check_morale(unit: Dictionary) -> void:
 		unit["unit_status"] = "BROKEN"
 		_start_break(unit)
 		combat.log_event("%s has BROKEN!" % uname)
+	elif effective_morale >= MORALE_BREAK_THRESHOLD and (status == "BROKEN" or status == "ROUTING"):
+		# Rally - morale has recovered enough
+		unit["unit_status"] = ""
+		combat.log_event("%s has rallied" % uname)
+
+
+func _check_pursuit() -> void:
+	for unit in units:
+		if unit.get("side", "player") != "player":
+			continue
+		# HQ units never pursue
+		var utype: Dictionary = unit_types.get(unit.get("type_code", ""), {})
+		if utype.get("is_hq", false):
+			continue
+		var status: String = unit.get("unit_status", "")
+		if status == "DESTROYED" or status == "BROKEN" or status == "ROUTING":
+			continue
+
+		var uname: String = unit.get("name", "")
+		var order: Order = order_manager.get_order(uname)
+		if order == null:
+			continue
+
+		var pursuit_mode: Order.Pursuit = order.pursuit
+		if pursuit_mode == Order.Pursuit.HOLD:
+			continue
+
+		# Check if unit is already pursuing
+		if unit.get("pursuing", "") != "":
+			# Verify target still visible and still fleeing
+			var target_name: String = unit.get("pursuing", "")
+			var target_unit: Dictionary = {}
+			for other in units:
+				if other.get("name", "") == target_name:
+					target_unit = other
+					break
+			if target_unit.is_empty() or target_unit.get("unit_status", "") == "DESTROYED":
+				unit["pursuing"] = ""
+				continue
+			# Check still in spotting range
+			var unit_pos := Vector2i(unit["col"], unit["row"])
+			var target_pos := Vector2i(target_unit["col"], target_unit["row"])
+			var spot_range: int = _get_effective_spotting_range(unit)
+			if _hex_distance(unit_pos, target_pos) > spot_range:
+				unit["pursuing"] = ""
+				continue
+			# Check still in HQ comms range
+			if not unit.get("in_comms", false):
+				unit["pursuing"] = ""
+				continue
+			# Check target still broken/routing
+			var t_status: String = target_unit.get("unit_status", "")
+			if t_status != "BROKEN" and t_status != "ROUTING":
+				unit["pursuing"] = ""
+				continue
+			# Update pursuit waypoint
+			_update_pursuit_target(unit, target_unit, pursuit_mode)
+			continue
+
+		# Look for a broken/routing enemy to pursue
+		var targets := _find_targets_in_range(unit)
+		for target in targets:
+			var t_status: String = target.get("unit_status", "")
+			if t_status == "BROKEN" or t_status == "ROUTING":
+				# Check we'd stay in comms range
+				if not unit.get("in_comms", false):
+					continue
+				unit["pursuing"] = target.get("name", "")
+				_update_pursuit_target(unit, target, pursuit_mode)
+				combat.log_event("%s pursuing %s (%s)" % [
+					uname, target.get("name", "?"),
+					Order.pursuit_to_string(pursuit_mode).to_upper()])
+				break
+
+
+func _update_pursuit_target(unit: Dictionary, target: Dictionary, pursuit_mode: Order.Pursuit) -> void:
+	var uname: String = unit.get("name", "")
+	var unit_pos := Vector2i(unit["col"], unit["row"])
+	var target_pos := Vector2i(target["col"], target["row"])
+	var utype_code: String = unit.get("type_code", "")
+	var utype: Dictionary = unit_types.get(utype_code, {})
+
+	# Check HQ comms range - don't pursue beyond it
+	var assigned_hq_name: String = unit.get("assigned_hq", "")
+	if assigned_hq_name != "":
+		var hq_unit: Dictionary = {}
+		for other in units:
+			if other.get("name", "") == assigned_hq_name:
+				hq_unit = other
+				break
+		if not hq_unit.is_empty():
+			var hq_type: Dictionary = unit_types.get(hq_unit.get("type_code", ""), {})
+			var comms_data = hq_type.get("comms", {})
+			if comms_data is Dictionary:
+				var comms_range: float = float(comms_data.get("range_km", 0)) / 0.5
+				var hq_pos := Vector2i(hq_unit["col"], hq_unit["row"])
+				if float(_hex_distance(target_pos, hq_pos)) > comms_range:
+					# Target is outside comms range - don't pursue there
+					unit["pursuing"] = ""
+					return
+
+	match pursuit_mode:
+		Order.Pursuit.SHADOW:
+			# Stay at spotting range - move to keep target at edge of vision
+			var spot_range: int = _get_effective_spotting_range(unit)
+			var dist: int = _hex_distance(unit_pos, target_pos)
+			if dist > spot_range - 1:
+				# Need to close distance to keep in sight
+				_issue_immediate_order(unit, Order.Type.MOVE, target_pos,
+					Order.Posture.CAUTIOUS, Order.ROE.RETURN_FIRE)
+		Order.Pursuit.PRESS:
+			# Close in aggressively
+			_issue_immediate_order(unit, Order.Type.MOVE, target_pos,
+				Order.Posture.FAST, Order.ROE.FIRE_AT_WILL)
+
+
+func _on_unit_destroyed(dead_unit: Dictionary) -> void:
+	var dead_pos := Vector2i(dead_unit["col"], dead_unit["row"])
+	var dead_side: String = dead_unit.get("side", "player")
+
+	# Add death marker
+	death_markers[dead_pos] = game_clock.game_time_minutes
+
+	# Apply morale shock to friendly units
+	var dead_hq_name: String = dead_unit.get("assigned_hq", "")
+	for unit in units:
+		if unit.get("side", "player") != dead_side:
+			continue
+		if unit.get("unit_status", "") == "DESTROYED":
+			continue
+		var uname: String = unit.get("name", "")
+		var shock: int = 0
+
+		# Direct HQ takes the biggest hit
+		if uname == dead_hq_name:
+			shock = destruction_direct_hq_shock
+		else:
+			# Check if this unit's HQ is the dead unit's HQ (sibling unit)
+			var unit_hq: String = unit.get("assigned_hq", "")
+			if unit_hq == dead_hq_name and dead_hq_name != "":
+				shock = destruction_direct_hq_shock / 2  # sibling lost
+
+			# Parent HQ
+			var dead_unit_hq_unit: Dictionary = {}
+			for other in units:
+				if other.get("name", "") == dead_hq_name:
+					dead_unit_hq_unit = other
+					break
+			if not dead_unit_hq_unit.is_empty():
+				var parent_hq: String = dead_unit_hq_unit.get("assigned_hq", "")
+				if uname == parent_hq:
+					shock = maxi(shock, destruction_parent_hq_shock)
+
+		# Anyone with LOS to the death
+		if shock == 0:
+			var unit_pos := Vector2i(unit["col"], unit["row"])
+			var spot_range: int = _get_effective_spotting_range(unit)
+			if _hex_distance(unit_pos, dead_pos) <= spot_range:
+				var unit_elev: int = elevation_grid[unit_pos.y][unit_pos.x]
+				if _has_los(unit_pos, unit_elev, dead_pos):
+					shock = destruction_los_witness_shock
+
+		if shock > 0:
+			var cur_dmg: int = int(unit.get("morale_damage", 0))
+			unit["morale_damage"] = cur_dmg + shock
+			combat.log_event("%s morale shocked (-%d) by destruction of %s" % [
+				uname, shock, dead_unit.get("name", "?")])
 
 
 func _recover_morale(unit: Dictionary, minutes: float) -> void:
@@ -839,19 +1147,18 @@ func _load_map() -> void:
 			row_data.append(int(p))
 		elevation_grid.append(row_data)
 
+	# Map-specific sunrise/sunset override
+	var map_sunrise: int = cfg.get_int("sunrise_hour", -1)
+	var map_sunset: int = cfg.get_int("sunset_hour", -1)
+	if map_sunrise >= 0:
+		sunrise_hour = map_sunrise
+	if map_sunset >= 0:
+		sunset_hour = map_sunset
+
 
 func _setup_info_label() -> void:
-	info_label = Label.new()
-	info_label.position = Vector2(10, 10)
-	info_label.add_theme_font_size_override("font_size", 16)
-	info_label.add_theme_color_override("font_color", Color(0.95, 0.95, 0.9))
-	info_label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.8))
-	info_label.add_theme_constant_override("shadow_offset_x", 1)
-	info_label.add_theme_constant_override("shadow_offset_y", 1)
-	var ui_layer := CanvasLayer.new()
-	ui_layer.layer = 10
-	add_child(ui_layer)
-	ui_layer.add_child(info_label)
+	# Info label is now created in _setup_display_bar
+	pass
 
 
 func _setup_hex_panel() -> void:
@@ -882,19 +1189,19 @@ func _setup_hex_panel() -> void:
 	style.corner_radius_bottom_right = 2
 	hex_panel.add_theme_stylebox_override("panel", style)
 
-	# Use a Control wrapper for anchoring
+	# Anchor bottom-left, just above the display bar (36px)
 	var anchor := Control.new()
-	anchor.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
-	anchor.offset_left = -290
-	anchor.offset_top = -200
-	anchor.offset_right = -6
-	anchor.offset_bottom = -6
-	anchor.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	anchor.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	anchor.offset_left = 6
+	anchor.offset_top = -160
+	anchor.offset_right = 290
+	anchor.offset_bottom = -44
+	anchor.grow_horizontal = Control.GROW_DIRECTION_END
 	anchor.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	ui_layer.add_child(anchor)
 	anchor.add_child(hex_panel)
-	hex_panel.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
-	hex_panel.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	hex_panel.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	hex_panel.grow_horizontal = Control.GROW_DIRECTION_END
 	hex_panel.grow_vertical = Control.GROW_DIRECTION_BEGIN
 
 	var vbox := VBoxContainer.new()
@@ -935,6 +1242,7 @@ func _setup_unit_panel() -> void:
 	unit_panel.order_cleared.connect(_on_order_cleared)
 	unit_panel.posture_changed.connect(_on_posture_changed)
 	unit_panel.roe_changed.connect(_on_roe_changed)
+	unit_panel.pursuit_changed.connect(_on_pursuit_changed)
 
 
 func _setup_display_bar() -> void:
@@ -962,8 +1270,7 @@ func _setup_display_bar() -> void:
 	panel.set_anchors_preset(Control.PRESET_FULL_RECT)
 
 	var hbox := HBoxContainer.new()
-	hbox.add_theme_constant_override("separation", 24)
-	hbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	hbox.add_theme_constant_override("separation", 16)
 	panel.add_child(hbox)
 
 	var cb_los := CheckBox.new()
@@ -1007,12 +1314,23 @@ func _setup_display_bar() -> void:
 	hbox.add_child(cb_elev)
 
 	var cb_move := CheckBox.new()
-	cb_move.text = "Move Cost"
+	cb_move.text = "Movement Speed"
 	cb_move.button_pressed = false
 	cb_move.add_theme_font_size_override("font_size", 13)
 	cb_move.add_theme_color_override("font_color", Color(0.78, 0.8, 0.72))
 	cb_move.toggled.connect(func(pressed: bool) -> void: show_move_cost = pressed; queue_redraw())
 	hbox.add_child(cb_move)
+
+	# Spacer to push info label to the right
+	var spacer := Control.new()
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	hbox.add_child(spacer)
+
+	# Hotkeys info label (right side of bar)
+	info_label = Label.new()
+	info_label.add_theme_font_size_override("font_size", 12)
+	info_label.add_theme_color_override("font_color", Color(0.6, 0.62, 0.55))
+	hbox.add_child(info_label)
 
 
 func _load_posture_configs() -> void:
@@ -1046,12 +1364,102 @@ func _setup_game_flow() -> void:
 	game_flow_panel = GameFlowPanel.new()
 	add_child(game_flow_panel)
 	game_flow_panel.set_clock(game_clock)
+	game_flow_panel.sunrise = sunrise_hour
+	game_flow_panel.sunset = sunset_hour
+	game_flow_panel.execute_pressed.connect(_on_execute_pressed)
+	game_flow_panel.interrupt_pressed.connect(_on_interrupt_pressed)
+
+
+func _on_execute_pressed() -> void:
+	if game_clock.is_orders_phase():
+		game_flow_panel.reset_ooda_count()
+		_begin_execution()
+
+
+func _on_interrupt_pressed() -> void:
+	# Force back to orders phase mid-execution
+	game_clock.current_phase = GameClock.Phase.ORDERS
+	game_clock.phase_changed.emit("ORDERS")
+	game_flow_panel.reset_ooda_count()
 
 
 func _on_phase_changed(phase: String) -> void:
 	unit_panel.set_orders_phase(phase == "ORDERS")
 	if phase == "ORDERS":
 		_check_auto_continue()
+
+
+func _begin_execution() -> void:
+	if not game_clock.is_orders_phase():
+		return
+	var cycle := _calculate_ooda_cycle()
+	game_clock.set_next_cycle(cycle)
+	game_flow_panel.cycle_label.text = "OODA cycle: %d min" % ceili(cycle)
+	game_clock.end_orders_phase()
+
+
+func _calculate_ooda_cycle() -> float:
+	## Calculate the current OODA cycle length based on top-level HQ status
+	## Also updates the tooltip breakdown on the game flow panel
+	var cycle := ooda_base_cycle
+	var breakdown: Array[String] = ["Base: %.0f min" % ooda_base_cycle]
+
+	# Find the top-level HQ
+	var top_hq: Dictionary = {}
+	for unit in units:
+		if unit.get("side", "player") != "player":
+			continue
+		var utype: Dictionary = unit_types.get(unit.get("type_code", ""), {})
+		if utype.get("is_hq", false) and int(utype.get("hq_level", 0)) == 1:
+			top_hq = unit
+			break
+
+	if top_hq.is_empty() or top_hq.get("unit_status", "") == "DESTROYED":
+		cycle *= ooda_hq_destroyed_penalty
+		breakdown.append("HQ destroyed: x%.1f" % ooda_hq_destroyed_penalty)
+		var result := clampf(cycle, ooda_min_cycle, ooda_max_cycle)
+		game_flow_panel.cycle_label.tooltip_text = "\n".join(breakdown)
+		return result
+
+	# Training modifier from HQ unit type
+	var hq_utype: Dictionary = unit_types.get(top_hq.get("type_code", ""), {})
+	var training: String = str(hq_utype.get("training", "regular"))
+	var train_mod: float = ooda_training_modifiers.get(training, 1.0)
+	cycle *= train_mod
+	if train_mod != 1.0:
+		breakdown.append("HQ training (%s): x%.1f" % [training, train_mod])
+
+	# HQ moving penalty
+	var hq_order: Order = order_manager.get_order(top_hq.get("name", ""))
+	if hq_order != null and hq_order.status == Order.Status.EXECUTING:
+		cycle *= ooda_hq_moving_penalty
+		breakdown.append("HQ moving: x%.1f" % ooda_hq_moving_penalty)
+
+	# HQ suppressed penalty
+	var hq_supp: float = combat.get_suppression(top_hq.get("name", ""))
+	if hq_supp > 10:
+		cycle *= ooda_hq_suppressed_penalty
+		breakdown.append("HQ under fire: x%.1f" % ooda_hq_suppressed_penalty)
+
+	# HQ crew casualties
+	var max_crew: int = int(hq_utype.get("crew", 3))
+	var cur_crew: int = int(top_hq.get("current_crew", max_crew))
+	var crew_lost: int = max_crew - cur_crew
+	if crew_lost > 0:
+		var crew_mult := 1.0 + float(crew_lost) * ooda_hq_crew_loss_per
+		cycle *= crew_mult
+		breakdown.append("HQ casualties (%d lost): x%.1f" % [crew_lost, crew_mult])
+
+	# Night penalty
+	if _is_night():
+		cycle *= night_ooda_penalty
+		breakdown.append("Night: x%.1f" % night_ooda_penalty)
+
+	var result := clampf(cycle, ooda_min_cycle, ooda_max_cycle)
+	breakdown.append("---")
+	breakdown.append("Total: %.0f min" % result)
+	game_flow_panel.cycle_label.tooltip_text = "\n".join(breakdown)
+	return result
 
 
 func _check_auto_continue() -> void:
@@ -1075,8 +1483,9 @@ func _check_auto_continue() -> void:
 			_select_and_center_unit(unit_needing_orders)
 			return
 
-	# Nothing needs attention - keep going
-	game_clock.end_orders_phase()
+	# Nothing needs attention - keep going, but enable interrupt after phase changes
+	_begin_execution()
+	game_flow_panel.set_interruptable()
 
 
 func _find_unit_needing_orders() -> Dictionary:
@@ -1088,8 +1497,8 @@ func _find_unit_needing_orders() -> Dictionary:
 			continue
 		var uname: String = unit.get("name", "")
 		var order: Order = order_manager.get_order(uname)
-		if order == null or order.status == Order.Status.COMPLETE or order.status == Order.Status.COUNTERMANDED:
-			# This unit has no active orders
+		# Only flag units whose orders just completed - not units that were never given orders
+		if order != null and (order.status == Order.Status.COMPLETE or order.status == Order.Status.COUNTERMANDED):
 			var utype: Dictionary = unit_types.get(unit.get("type_code", ""), {})
 			if not utype.get("is_hq", false):
 				return unit
@@ -1142,10 +1551,71 @@ func _on_roe_changed(unit_name: String, roe: Order.ROE) -> void:
 		queue_redraw()
 
 
+func _on_pursuit_changed(unit_name: String, pursuit: Order.Pursuit) -> void:
+	var order := order_manager.get_order(unit_name)
+	if order != null and order.status != Order.Status.EXECUTING:
+		order.pursuit = pursuit
+		current_pursuit = pursuit
+		_update_info_label()
+		queue_redraw()
+
+
 func _on_order_cleared(unit_name: String) -> void:
 	order_manager.cancel_order(unit_name)
 	_update_info_label()
 	queue_redraw()
+
+
+func _update_fog_of_war() -> void:
+	# 1. Reveal hexes within player units' extended spotting range
+	for unit in units:
+		if unit.get("side", "player") != "player":
+			continue
+		var unit_pos := Vector2i(unit["col"], unit["row"])
+		var reveal_range: int = _get_effective_spotting_range(unit) + 3
+		for dc in range(-reveal_range, reveal_range + 1):
+			for dr in range(-reveal_range, reveal_range + 1):
+				var c: int = unit_pos.x + dc
+				var r: int = unit_pos.y + dr
+				if c < 0 or c >= map_cols or r < 0 or r >= map_rows:
+					continue
+				var hex_coord := Vector2i(c, r)
+				if _hex_distance(unit_pos, hex_coord) <= reveal_range:
+					revealed_hexes[hex_coord] = true
+
+	# 2. Find currently spotted enemy units
+	var new_spotted: Dictionary = {}
+	for unit in units:
+		if unit.get("side", "player") != "player":
+			continue
+		var targets: Array = _find_targets_in_range(unit)
+		for target in targets:
+			var tname: String = target.get("name", "")
+			var tpos := Vector2i(target["col"], target["row"])
+			new_spotted[tname] = tpos
+
+	# 3. Enemies that were spotted last tick but aren't now -> last_seen
+	for uname in spotted_enemies:
+		if uname not in new_spotted:
+			var old_pos: Vector2i = spotted_enemies[uname]
+			last_seen_enemies[old_pos] = game_clock.game_time_minutes
+
+	spotted_enemies = new_spotted
+
+	# 4. Clean up expired last-seen markers
+	var to_remove: Array = []
+	for pos in last_seen_enemies:
+		var age: float = game_clock.game_time_minutes - float(last_seen_enemies[pos])
+		if age > LAST_SEEN_DURATION:
+			to_remove.append(pos)
+	for pos in to_remove:
+		last_seen_enemies.erase(pos)
+
+	# 5. Clear last-seen markers for positions where an enemy is currently spotted
+	for uname in spotted_enemies:
+		var pos: Vector2i = spotted_enemies[uname]
+		if pos in last_seen_enemies:
+			last_seen_enemies.erase(pos)
 
 
 func _on_time_advanced(minutes: float) -> void:
@@ -1160,11 +1630,85 @@ func _on_time_advanced(minutes: float) -> void:
 	for unit in units:
 		_check_morale(unit)
 		_recover_morale(unit, minutes)
+	# Check pursuit triggers
+	_check_pursuit()
+	# Update fog of war
+	_update_fog_of_war()
+	# Update OODA cycle display
+	game_flow_panel.cycle_label.text = "OODA cycle: %d min" % ceili(_calculate_ooda_cycle())
+	# Write game state log
+	_write_game_log()
 	# Keep selection tracking the selected unit
 	if not selected_unit.is_empty():
 		selected_hex = Vector2i(selected_unit["col"], selected_unit["row"])
 		_update_info_label()
 	queue_redraw()
+
+
+func _write_game_log() -> void:
+	var file := FileAccess.open("user://game_state.log", FileAccess.WRITE)
+	if file == null:
+		return
+	file.store_line("=== GAME STATE at %s ===" % game_clock.get_time_string())
+	file.store_line("Phase: %s  |  OODA cycle: %.0f min" % [
+		game_clock.get_phase_string(), _calculate_ooda_cycle()])
+	file.store_line("Night: %s" % str(_is_night()))
+	file.store_line("")
+
+	for unit in units:
+		var uname: String = unit.get("name", "?")
+		var utype_code: String = unit.get("type_code", "")
+		var utype: Dictionary = unit_types.get(utype_code, {})
+		var pos := Vector2i(unit["col"], unit["row"])
+		var status: String = unit.get("unit_status", "")
+		if status == "":
+			status = "OK"
+		var cur_morale: int = int(unit.get("current_morale", 0))
+		var morale_dmg: int = int(unit.get("morale_damage", 0))
+		var cur_crew: int = int(unit.get("current_crew", 0))
+		var max_crew: int = int(utype.get("crew", 0))
+		var vdmg: float = float(unit.get("vehicle_damage", 0.0))
+		var mobdmg: float = float(unit.get("mobility_damage", 0.0))
+		var supp: float = combat.get_suppression(uname)
+		var in_comms: bool = unit.get("in_comms", false)
+		var in_los: bool = unit.get("in_hq_los", false)
+		var assigned_hq: String = unit.get("assigned_hq", "")
+
+		file.store_line("[%s] %s (%s)  side=%s  pos=(%d,%d)" % [
+			utype_code, uname, status, unit.get("side", "?"), pos.x, pos.y])
+		file.store_line("  Morale: %d (base %d, permanent dmg: %d)  Crew: %d/%d" % [
+			cur_morale, int(utype.get("morale", 50)), morale_dmg, cur_crew, max_crew])
+		file.store_line("  Vehicle: %.0f%% dmg  Mobility: %.0f%% dmg  Suppression: %.0f%%" % [
+			vdmg * 100, mobdmg * 100, supp])
+		file.store_line("  HQ: %s  Comms: %s  LOS: %s" % [assigned_hq, str(in_comms), str(in_los)])
+
+		var ammo_arr: Array = unit.get("current_ammo", [])
+		var weapons: Array = utype.get("weapons", [])
+		if weapons is Array:
+			for wi in range(weapons.size()):
+				var w: Dictionary = weapons[wi]
+				var cur_ammo: int = int(ammo_arr[wi]) if wi < ammo_arr.size() else 0
+				var max_ammo: int = int(w.get("ammo", 0))
+				file.store_line("  Weapon: %s  Ammo: %d/%d" % [w.get("name", "?"), cur_ammo, max_ammo])
+
+		var order: Order = order_manager.get_order(uname)
+		if order != null:
+			file.store_line("  Order: %s  Status: %s  Posture: %s  ROE: %s  Pursuit: %s" % [
+				Order.type_to_string(order.type),
+				order.status_string(),
+				Order.posture_to_string(order.posture),
+				Order.roe_to_string(order.roe),
+				Order.pursuit_to_string(order.pursuit)])
+			file.store_line("  Waypoints: %d (current: %d)" % [order.waypoint_count(), order.current_waypoint_index])
+		file.store_line("")
+
+	# Combat log (last 20 entries)
+	file.store_line("=== COMBAT LOG (recent) ===")
+	var log_start: int = maxi(0, combat.combat_log.size() - 20)
+	for i in range(log_start, combat.combat_log.size()):
+		file.store_line(combat.combat_log[i])
+
+	file.close()
 
 
 func _move_units(minutes: float) -> void:
@@ -1270,6 +1814,20 @@ func _move_units(minutes: float) -> void:
 
 			if next_speed_mod <= 0.0:
 				order.status = Order.Status.COMPLETE
+				unit["move_accumulator"] = 0.0
+				break
+
+			# Can't enter a hex occupied by any other unit
+			var hex_blocked := false
+			for other in units:
+				if other == unit:
+					continue
+				if other.get("unit_status", "") == "DESTROYED":
+					continue
+				if int(other["col"]) == next_hex.x and int(other["row"]) == next_hex.y:
+					hex_blocked = true
+					break
+			if hex_blocked:
 				unit["move_accumulator"] = 0.0
 				break
 
@@ -1450,11 +2008,19 @@ func _draw() -> void:
 				clampf(base_color.b + shade, 0, 1)
 			)
 
-			_draw_hex_filled(center, scaled_size, color)
-			_draw_hex_detail(center, scaled_size, code)
+			# Fog of war: check if hex is revealed
+			var hex_coord := Vector2i(col, row)
+			var always_known := code == "S" or code == "T" or code == "C" or code == "R"
+			var is_revealed := always_known or hex_coord in revealed_hexes
 
-			# Hex overlay labels (elevation, movement)
-			if scaled_size > 10:
+			if is_revealed:
+				_draw_hex_filled(center, scaled_size, color)
+				_draw_hex_detail(center, scaled_size, code)
+			else:
+				_draw_hex_filled(center, scaled_size, Color(0.18, 0.2, 0.17))
+
+			# Hex overlay labels (elevation, movement) - only on revealed hexes
+			if scaled_size > 10 and is_revealed:
 				var font := ThemeDB.fallback_font
 				var label_size := int(clampf(scaled_size * 0.22, 7, 14))
 				if show_elevation:
@@ -1655,16 +2221,61 @@ func _draw() -> void:
 
 			prev_screen = wp_screen
 
+	# Draw last-seen enemy markers (small red circle, not hex fill)
+	for pos in last_seen_enemies:
+		var age: float = game_clock.game_time_minutes - float(last_seen_enemies[pos])
+		if age > LAST_SEEN_DURATION:
+			continue
+		var lse_alpha: float = clampf(1.0 - age / LAST_SEEN_DURATION, 0.0, 1.0) * 0.6
+		var screen_pos := (_hex_to_pixel(pos.x, pos.y) - camera_offset / zoom_level) * zoom_level
+		var circle_r := scaled_size * 0.25
+		var circle_color := Color(0.85, 0.15, 0.1, lse_alpha)
+		var segments := 16
+		var prev_pt := screen_pos + Vector2(circle_r, 0)
+		for ci in range(1, segments + 1):
+			var a := deg_to_rad(float(ci) / segments * 360.0)
+			var next_pt := screen_pos + Vector2(cos(a), sin(a)) * circle_r
+			draw_line(prev_pt, next_pt, circle_color, maxf(1.5, scaled_size * 0.04))
+			prev_pt = next_pt
+
+	# Draw death markers (skull-like X)
+	for pos in death_markers:
+		var age: float = game_clock.game_time_minutes - float(death_markers[pos])
+		if age > destruction_marker_duration:
+			continue
+		var dm_alpha: float = clampf(1.0 - age / destruction_marker_duration, 0.3, 0.9)
+		var dm_screen := (_hex_to_pixel(pos.x, pos.y) - camera_offset / zoom_level) * zoom_level
+		var dm_size := scaled_size * 0.3
+		var dm_color := Color(0.7, 0.1, 0.05, dm_alpha)
+		var dm_w := maxf(2.0, scaled_size * 0.06)
+		# Draw X
+		draw_line(dm_screen + Vector2(-dm_size, -dm_size), dm_screen + Vector2(dm_size, dm_size), dm_color, dm_w)
+		draw_line(dm_screen + Vector2(dm_size, -dm_size), dm_screen + Vector2(-dm_size, dm_size), dm_color, dm_w)
+		# Draw circle around X
+		var dm_r := dm_size * 1.3
+		var dm_prev := dm_screen + Vector2(dm_r, 0)
+		for dmi in range(1, 17):
+			var dm_a := deg_to_rad(float(dmi) / 16.0 * 360.0)
+			var dm_next := dm_screen + Vector2(cos(dm_a), sin(dm_a)) * dm_r
+			draw_line(dm_prev, dm_next, dm_color, dm_w * 0.7)
+			dm_prev = dm_next
+
 	# Draw units on top
 	if show_units:
 		for unit in units:
+			var unit_side: String = unit.get("side", "player")
+			# Fog of war: skip enemy units that aren't currently spotted
+			if unit_side == "enemy":
+				var uname: String = unit.get("name", "")
+				if uname not in spotted_enemies:
+					continue
 			var uc: int = unit["col"]
 			var ur: int = unit["row"]
 			if uc >= min_col and uc <= max_col and ur >= min_row and ur <= max_row:
 				var center := (_hex_to_pixel(uc, ur) - camera_offset / zoom_level) * zoom_level
 				var type_code: String = unit["type_code"]
 				if type_code in unit_types:
-					_draw_unit_counter(center, scaled_size, unit_types[type_code], unit["name"], unit.get("side", "player"))
+					_draw_unit_counter(center, scaled_size, unit_types[type_code], unit["name"], unit_side)
 
 	# Draw fire effects - red lines from shooter to target, flash on hit
 	for effect in fire_effects:
@@ -1993,7 +2604,8 @@ func _cube_round(fq: float, fr: float, fs: float) -> Vector3i:
 func _update_info_label() -> void:
 	var posture_str := Order.posture_to_string(current_posture).to_upper()
 	var roe_str := Order.roe_to_string(current_roe).to_upper()
-	info_label.text = "%s (1/2/3)  |  %s (Q/W/E/R)  |  Cmd+Click: waypoint  |  ESC: undo" % [posture_str, roe_str]
+	var pursuit_str := Order.pursuit_to_string(current_pursuit).to_upper()
+	info_label.text = "%s (1/2/3)  |  %s (QWER)  |  %s (ZXC)  |  Cmd+Click: waypoint" % [posture_str, roe_str, pursuit_str]
 
 	if selected_hex != Vector2i(-1, -1) and selected_hex.y < terrain_grid.size() and selected_hex.x < terrain_grid[selected_hex.y].size():
 		var code: String = terrain_grid[selected_hex.y][selected_hex.x]
@@ -2085,9 +2697,18 @@ func _unhandled_input(event: InputEvent) -> void:
 			KEY_R:
 				current_roe = Order.ROE.HALT_AND_ENGAGE
 				_update_info_label()
+			KEY_Z:
+				current_pursuit = Order.Pursuit.HOLD
+				_update_info_label()
+			KEY_X:
+				current_pursuit = Order.Pursuit.SHADOW
+				_update_info_label()
+			KEY_C:
+				current_pursuit = Order.Pursuit.PRESS
+				_update_info_label()
 			KEY_SPACE:
 				if game_clock.is_orders_phase():
-					game_clock.end_orders_phase()
+					_begin_execution()
 			KEY_ESCAPE:
 				_handle_escape()
 
@@ -2133,9 +2754,17 @@ func _handle_move_order(screen_pos: Vector2) -> void:
 		return  # Switching HQ, can't receive orders
 
 	var hq_mod: float = _get_hq_order_modifier(selected_unit)
+	# HQ units always default to hold fire, normal posture, no pursuit
+	var wp_posture := current_posture
+	var wp_roe := current_roe
+	var wp_pursuit := current_pursuit
+	if utype.get("is_hq", false):
+		wp_posture = Order.Posture.NORMAL
+		wp_roe = Order.ROE.HOLD_FIRE
+		wp_pursuit = Order.Pursuit.HOLD
 	var order := order_manager.issue_order(
 		selected_unit, utype, Order.Type.MOVE, target,
-		game_clock.game_time_minutes, current_posture, current_roe, hq_mod)
+		game_clock.game_time_minutes, wp_posture, wp_roe, hq_mod, wp_pursuit)
 
 	_update_info_label()
 	queue_redraw()

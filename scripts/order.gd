@@ -5,11 +5,12 @@ enum Type { MOVE, ATTACK, DEFEND, WITHDRAW, HOLD }
 enum Status { FORMULATING, PREPARING, EXECUTING, COMPLETE, COUNTERMANDED }
 enum Posture { FAST, NORMAL, CAUTIOUS }
 enum ROE { HOLD_FIRE, RETURN_FIRE, FIRE_AT_WILL, HALT_AND_ENGAGE }
+enum Pursuit { HOLD, SHADOW, PRESS }
 
 var type: Type
 var status: Status = Status.FORMULATING
 
-# Waypoints: array of {hex: Vector2i, posture: Posture, roe: ROE}
+# Waypoints: array of {hex: Vector2i, posture: Posture, roe: ROE, pursuit: Pursuit}
 var waypoints: Array[Dictionary] = []
 var current_waypoint_index: int = 0
 
@@ -31,6 +32,18 @@ var roe: ROE:
 	set(value):
 		if current_waypoint_index < waypoints.size():
 			waypoints[current_waypoint_index]["roe"] = value
+
+# Current pursuit mode - from current waypoint, persists after last waypoint
+var pursuit: Pursuit:
+	get:
+		if current_waypoint_index < waypoints.size():
+			return waypoints[current_waypoint_index].get("pursuit", Pursuit.HOLD)
+		elif not waypoints.is_empty():
+			return waypoints[waypoints.size() - 1].get("pursuit", Pursuit.HOLD)
+		return Pursuit.HOLD
+	set(value):
+		if current_waypoint_index < waypoints.size():
+			waypoints[current_waypoint_index]["pursuit"] = value
 
 # Current posture - from current waypoint
 var posture: Posture:
@@ -54,8 +67,8 @@ var was_countermanded: bool = false
 var unit_name: String = ""
 
 
-func add_waypoint(hex: Vector2i, wp_posture: Posture, wp_roe: ROE = ROE.RETURN_FIRE) -> void:
-	waypoints.append({"hex": hex, "posture": wp_posture, "roe": wp_roe})
+func add_waypoint(hex: Vector2i, wp_posture: Posture, wp_roe: ROE = ROE.RETURN_FIRE, wp_pursuit: Pursuit = Pursuit.HOLD) -> void:
+	waypoints.append({"hex": hex, "posture": wp_posture, "roe": wp_roe, "pursuit": wp_pursuit})
 
 
 func remove_last_waypoint() -> bool:
@@ -116,6 +129,21 @@ static func roe_from_string(s: String) -> ROE:
 		"fire at will": return ROE.FIRE_AT_WILL
 		"halt & engage", "halt and engage": return ROE.HALT_AND_ENGAGE
 	return ROE.RETURN_FIRE
+
+
+static func pursuit_to_string(p: Pursuit) -> String:
+	match p:
+		Pursuit.HOLD: return "hold"
+		Pursuit.SHADOW: return "shadow"
+		Pursuit.PRESS: return "press"
+	return "hold"
+
+
+static func pursuit_from_string(s: String) -> Pursuit:
+	match s.to_lower():
+		"shadow": return Pursuit.SHADOW
+		"press": return Pursuit.PRESS
+	return Pursuit.HOLD
 
 
 static func type_to_string(t: Type) -> String:

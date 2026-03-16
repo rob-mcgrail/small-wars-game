@@ -4,14 +4,35 @@
 ooda:
   base_cycle_minutes: 15
   min_cycle_minutes: 5
-  training_bonus_minutes: 2
+  max_cycle_minutes: 45
+  # Training modifier on base cycle (multiplied)
+  training_modifier:
+    militia: 1.5
+    irregular: 1.2
+    regular: 1.0
+    veteran: 0.8
+    elite: 0.6
+  # Penalty multipliers (applied when condition is true)
+  hq_moving_penalty: 1.5
+  hq_suppressed_penalty: 2.0
+  hq_destroyed_penalty: 3.0
+  # Crew loss: per crew member lost from top HQ
+  hq_crew_loss_penalty_per: 0.25
 
 # Time settings
 time:
-  # How many real seconds per game minute during execution
   seconds_per_minute: 0.5
   start_hour: 6
   start_minute: 0
+  sunrise_hour: 6
+  sunset_hour: 19
+
+# Night time penalties (applied to units without night_vision attribute)
+night:
+  ooda_penalty: 1.5
+  spotting_range_modifier: 0.3
+  accuracy_modifier: 0.4
+  effective_range_modifier: 0.5
 
 # Order delays (in minutes of game time)
 # Total delay = staff formulation + unit preparation
@@ -85,3 +106,12 @@ hq:
   los_morale_buff: 20
   los_accuracy_buff: 1.2
   los_suppression_resistance: 0.85
+
+# Unit destruction effects
+destruction:
+  # Death marker duration in game minutes
+  marker_duration_minutes: 60
+  # Morale shock when a friendly unit is destroyed
+  direct_hq_morale_shock: 15
+  parent_hq_morale_shock: 8
+  los_witness_morale_shock: 10

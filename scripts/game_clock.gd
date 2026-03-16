@@ -44,9 +44,14 @@ func _process(delta: float) -> void:
 	if game_time_minutes >= next_orders_at:
 		game_time_minutes = next_orders_at
 		current_phase = Phase.ORDERS
-		next_orders_at = game_time_minutes + ooda_cycle_minutes
+		# next_orders_at will be set by hex_map via set_next_cycle + end_orders_phase
 		phase_changed.emit("ORDERS")
 		orders_phase_started.emit()
+
+
+func set_next_cycle(minutes: float) -> void:
+	## Call before end_orders_phase to set a dynamic cycle length
+	next_orders_at = game_time_minutes + minutes
 
 
 func end_orders_phase() -> void:

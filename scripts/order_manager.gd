@@ -38,7 +38,8 @@ func _ready() -> void:
 
 func issue_order(unit: Dictionary, unit_type: Dictionary, order_type: Order.Type,
 		target: Vector2i, current_time: float, posture: Order.Posture = Order.Posture.NORMAL,
-		roe: Order.ROE = Order.ROE.RETURN_FIRE, hq_modifier: float = 1.0) -> Order:
+		roe: Order.ROE = Order.ROE.RETURN_FIRE, hq_modifier: float = 1.0,
+		pursuit: Order.Pursuit = Order.Pursuit.HOLD) -> Order:
 	var unit_name: String = unit.get("name", "?")
 	var training: String = str(unit_type.get("training", "regular"))
 
@@ -48,7 +49,7 @@ func issue_order(unit: Dictionary, unit_type: Dictionary, order_type: Order.Type
 		if existing.status == Order.Status.FORMULATING or \
 				existing.status == Order.Status.PREPARING:
 			# Add waypoint to existing order
-			existing.add_waypoint(target, posture, roe)
+			existing.add_waypoint(target, posture, roe, pursuit)
 			_log("%s: waypoint %d added (%s)" % [
 				unit_name, existing.waypoint_count(),
 				Order.posture_to_string(posture).to_upper()])
@@ -65,7 +66,7 @@ func issue_order(unit: Dictionary, unit_type: Dictionary, order_type: Order.Type
 
 	var order := Order.new()
 	order.type = order_type
-	order.add_waypoint(target, posture, roe)
+	order.add_waypoint(target, posture, roe, pursuit)
 	order.unit_name = unit_name
 	order.issued_at = current_time
 	order.was_countermanded = countermanding
