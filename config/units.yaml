@@ -1,0 +1,47 @@
+# Unit type definitions
+unit_types:
+  - name: Technical
+    code: TEC
+    description: "Toyota Hilux pickup with mounted heavy weapon"
+    icon_color: "#d4a44a"
+    symbol: wheeled
+    speed_kmh: 80
+    amphibious: false
+    spotting_range: 4
+
+    # Crew and personnel
+    crew: 4
+    training: militia
+    morale: 5
+
+    # Protection
+    armor: 0
+    concealment: 2
+
+    # Weapon systems
+    # range_km: effective range when stationary
+    # range_moving_km: effective range while moving (drive-by / suppression)
+    weapons:
+      - name: "DShK 12.7mm"
+        type: hmg
+        range_km: 1.0
+        range_moving_km: 0.4
+        rate_of_fire: 600
+        vs_soft: 8
+        vs_armor: 1
+        ammo: 500
+
+      - name: "AK-47s (crew)"
+        type: rifle
+        range_km: 0.2
+        range_moving_km: 0.05
+        rate_of_fire: 100
+        vs_soft: 3
+        vs_armor: 0
+        ammo: 900
+
+# Training levels: militia, irregular, regular, veteran, elite
+# Morale: 1-10 (1 = will break immediately, 10 = fanatical)
+# Armor: 0 = unarmored, 1-3 = light, 4-6 = medium, 7-10 = heavy
+# Concealment: 0 = very visible, 1-3 = low, 4-6 = moderate, 7-10 = hard to spot
+# vs_soft/vs_armor: effectiveness rating 0-10

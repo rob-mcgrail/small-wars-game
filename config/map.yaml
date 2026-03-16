@@ -1,0 +1,18 @@
+# Map configuration
+# Each hex = 500m
+map:
+  cols: 80
+  rows: 60
+  hex_size: 40.0
+
+# Visual settings
+colors:
+  hex_fill: "#d9e0c7"
+  hex_outline: "#667358"
+  hex_selected: "#99bf80"
+  hex_hovered: "#bfd1ad"
+  font: "#1a1a1a"
+
+display:
+  outline_width: 1.5
+  font_size: 16

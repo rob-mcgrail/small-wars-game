@@ -1,0 +1,76 @@
+# Game flow configuration
+
+# OODA loop: how often the player gets an orders phase
+ooda:
+  base_cycle_minutes: 15
+  min_cycle_minutes: 5
+  training_bonus_minutes: 2
+
+# Time settings
+time:
+  # How many real seconds per game minute during execution
+  seconds_per_minute: 0.5
+  start_hour: 6
+  start_minute: 0
+
+# Order delays (in minutes of game time)
+# Total delay = staff formulation + unit preparation
+# Orders are not acted on until both delays have elapsed
+
+staff_formulation:
+  # Base time for HQ staff to process an order into executable form
+  base_minutes: 10
+  # Modifier per training level (multiplied by base)
+  training_modifier:
+    militia: 2.0
+    irregular: 1.5
+    regular: 1.0
+    veteran: 0.75
+    elite: 0.5
+  # Penalty for changing an existing order mid-execution (multiplied by base)
+  countermand_penalty: 1.5
+
+unit_preparation:
+  # Base time for a unit to prepare after receiving an order
+  base_minutes: 5
+  # Modifier per training level
+  training_modifier:
+    militia: 2.0
+    irregular: 1.5
+    regular: 1.0
+    veteran: 0.7
+    elite: 0.4
+  # Modifier per order type
+  order_modifier:
+    move: 1.0
+    attack: 1.5
+    defend: 0.8
+    withdraw: 1.2
+    hold: 0.3
+
+# Movement postures
+# speed_modifier: multiplier on unit road speed
+# detection_modifier: multiplier on how visible the unit is (higher = easier to spot)
+# prep_modifier: multiplier on unit preparation time
+postures:
+  fast:
+    speed_modifier: 1.0
+    detection_modifier: 1.5
+    prep_modifier: 0.8
+    # Pathfinding: heavily favour roads, ignore cover
+    road_preference: 3.0
+    cover_preference: 0.0
+  normal:
+    speed_modifier: 0.7
+    detection_modifier: 1.0
+    prep_modifier: 1.0
+    # Pathfinding: balanced
+    road_preference: 1.5
+    cover_preference: 0.5
+  cautious:
+    speed_modifier: 0.4
+    detection_modifier: 0.5
+    prep_modifier: 1.5
+    # Pathfinding: favour cover (woods, towns), avoid open ground
+    road_preference: 0.5
+    cover_preference: 3.0

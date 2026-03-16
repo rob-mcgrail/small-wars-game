@@ -1,0 +1,39 @@
+# Terrain type definitions
+# code: single character used in map data files
+# speed_modifier: multiplier applied to unit road speed (1.0 = road speed)
+terrain_types:
+  - name: open
+    code: O
+    color: "#c8d4a0"
+    speed_modifier: 0.5
+
+  - name: wooded
+    code: W
+    color: "#6b8e4e"
+    speed_modifier: 0.25
+
+  - name: river
+    code: R
+    color: "#4a80b4"
+    speed_modifier: 0.0
+    requires_amphibious: true
+
+  - name: street
+    code: S
+    color: "#b0a890"
+    speed_modifier: 1.0
+
+  - name: town
+    code: T
+    color: "#c4a070"
+    speed_modifier: 0.4
+
+  - name: city
+    code: C
+    color: "#8c8c8c"
+    speed_modifier: 0.3
+
+# Elevation rendering
+elevation:
+  min_shade: -0.15
+  max_shade: 0.15
