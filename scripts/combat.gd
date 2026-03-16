@@ -21,7 +21,7 @@ var combat_log: Array[String] = []
 var suppression: Dictionary = {}  # String -> float (0.0 to 100.0)
 
 const SUPPRESSION_DECAY_PER_MIN := 5.0
-const SUPPRESSION_PER_HIT_NEAR := 8.0   # round lands near (miss)
+const SUPPRESSION_PER_HIT_NEAR := 12.0   # round lands near (miss) - HMG near misses are terrifying
 const SUPPRESSION_PER_HIT := 15.0        # actual hit
 
 
@@ -38,6 +38,8 @@ func resolve_combat(shooter: Dictionary, target: Dictionary,
 		"crew_killed": 0,
 		"vehicle_damage": 0.0,
 		"suppression_added": 0.0,
+		"mobility_damage": 0.0,
+		"weapon_disabled": false,
 	}
 
 	if rounds_fired <= 0:
@@ -51,8 +53,8 @@ func resolve_combat(shooter: Dictionary, target: Dictionary,
 	var training: String = str(shooter_type.get("training", "regular"))
 	var base_accuracy: float = TRAINING_ACCURACY.get(training, 0.15)
 
-	# Elevation modifier on accuracy: +15% per level above, -15% per level below
-	var elev_accuracy_mult: float = clampf(1.0 + elevation_diff * 0.15, 0.5, 2.0)
+	# Elevation modifier on accuracy: +5% per level above, -5% per level below
+	var elev_accuracy_mult: float = clampf(1.0 + elevation_diff * 0.05, 0.7, 1.5)
 	base_accuracy *= elev_accuracy_mult
 
 	# Range modifier: accuracy degrades with distance
@@ -61,9 +63,9 @@ func resolve_combat(shooter: Dictionary, target: Dictionary,
 		max_range_km = float(weapon.get("range_moving_km", max_range_km * 0.3))
 	var max_range_hexes: float = max_range_km / 0.5
 
-	# Shooting downhill extends effective range (up to 1.5x)
+	# Shooting downhill slightly extends effective range (up to 1.2x)
 	if elevation_diff > 0:
-		var range_ext: float = clampf(1.0 + elevation_diff * 0.1, 1.0, 1.5)
+		var range_ext: float = clampf(1.0 + elevation_diff * 0.03, 1.0, 1.2)
 		max_range_hexes *= range_ext
 
 	var range_factor: float = 1.0
@@ -89,15 +91,18 @@ func resolve_combat(shooter: Dictionary, target: Dictionary,
 	# Suppression penalty on shooter
 	var shooter_name: String = shooter.get("name", "")
 	var shooter_suppression: float = suppression.get(shooter_name, 0.0)
-	var suppression_factor: float = clampf(1.0 - shooter_suppression / 100.0, 0.1, 1.0)
+	var suppression_factor: float = clampf(1.0 - (shooter_suppression / 60.0) * (shooter_suppression / 60.0), 0.05, 1.0)
 
 	# Suppressive fire penalty - still adds suppression but very unlikely to hit
 	var suppressive_penalty: float = 1.0
 	if is_suppressive:
 		suppressive_penalty = 0.15
 
+	# Platform accuracy modifier (vehicle-mounted weapons are less accurate)
+	var platform_accuracy: float = float(weapon.get("platform_accuracy", 1.0))
+
 	# Final hit probability per round
-	var hit_chance: float = base_accuracy * range_factor * move_penalty * cover_factor * suppression_factor * suppressive_penalty
+	var hit_chance: float = base_accuracy * range_factor * move_penalty * cover_factor * suppression_factor * suppressive_penalty * platform_accuracy
 	hit_chance = clampf(hit_chance, 0.001, 0.8)  # floor and ceiling
 
 	# Resolve each shot
@@ -112,29 +117,51 @@ func resolve_combat(shooter: Dictionary, target: Dictionary,
 			result["hits"] += 1
 			result["suppression_added"] += SUPPRESSION_PER_HIT
 
-			# Determine effect
+			# Determine effect using hit zone distribution
 			if target_armor > 0:
-				# Armored target - check penetration
+				# Armored target - check penetration first
 				var pen_chance: float = clampf(float(vs_armor) / float(target_armor + vs_armor), 0.0, 0.9)
 				if randf() < pen_chance:
-					# Penetration - crew casualty or vehicle damage
-					if randf() < 0.4:
-						result["crew_killed"] += 1
-					result["vehicle_damage"] += randf_range(0.1, 0.3)
+					# Penetrating hit - apply hit zone distribution
+					_apply_hit_zone(result, vs_soft)
 			else:
-				# Unarmored - very vulnerable
-				# vs_soft determines lethality
-				var kill_chance: float = clampf(float(vs_soft) / 10.0, 0.1, 0.9)
-				if randf() < kill_chance:
-					result["crew_killed"] += 1
-				# Vehicle always takes damage from hits on unarmored
-				result["vehicle_damage"] += randf_range(0.05, 0.15)
+				# Unarmored vehicle - apply hit zone distribution directly
+				_apply_hit_zone(result, vs_soft)
 		else:
 			# Miss but near misses still suppress
 			if roll < hit_chance * 3.0:
 				result["suppression_added"] += SUPPRESSION_PER_HIT_NEAR
 
 	return result
+
+
+func _apply_hit_zone(result: Dictionary, vs_soft: int) -> void:
+	## Distributes a hit across vehicle hit zones:
+	##   50% vehicle body, 20% mobility, 15% weapon, 10% crew, 5% fuel/ammo
+	var zone_roll: float = randf()
+	if zone_roll < 0.50:
+		# Vehicle body hit
+		result["vehicle_damage"] += randf_range(0.05, 0.15)
+	elif zone_roll < 0.70:
+		# Mobility hit (tire/engine)
+		result["mobility_damage"] += randf_range(0.15, 0.35)
+		result["vehicle_damage"] += randf_range(0.02, 0.08)
+	elif zone_roll < 0.85:
+		# Weapon/equipment hit
+		result["weapon_disabled"] = true
+		result["vehicle_damage"] += randf_range(0.03, 0.10)
+	elif zone_roll < 0.95:
+		# Crew hit
+		var kill_chance: float = clampf(float(vs_soft) / 10.0, 0.1, 0.9)
+		if randf() < kill_chance:
+			result["crew_killed"] += 1
+	else:
+		# Fuel/ammo - catastrophic
+		result["vehicle_damage"] += randf_range(0.3, 0.5)
+		result["mobility_damage"] += randf_range(0.2, 0.4)
+		# Likely crew casualty too
+		if randf() < 0.5:
+			result["crew_killed"] += 1
 
 
 func apply_suppression(unit_name: String, amount: float) -> void:

@@ -182,7 +182,8 @@ func _init_unit_ammo_and_morale(unit: Dictionary) -> void:
 	unit["current_morale"] = int(utype.get("morale", 50))
 	unit["current_crew"] = int(utype.get("crew", 4))
 	unit["vehicle_damage"] = 0.0  # 0.0 = pristine, 1.0+ = destroyed
-	unit["unit_status"] = ""  # "", "BROKEN", "ROUTING", "DESTROYED"
+	unit["mobility_damage"] = 0.0  # 0.0 = fine, 1.0+ = IMMOBILISED
+	unit["unit_status"] = ""  # "", "BROKEN", "ROUTING", "DESTROYED", "IMMOBILISED"
 	unit["morale_recovery_accum"] = 0.0  # fractional morale recovery accumulator
 
 
@@ -322,11 +323,14 @@ func _resolve_unit_combat(unit: Dictionary, minutes: float) -> void:
 		var target_moving := target_order != null and target_order.status == Order.Status.EXECUTING
 
 		var is_suppressive := float(best_dist) > w_effective_range_hexes
+		var shooter_elev: int = elevation_grid[unit_pos.y][unit_pos.x]
+		var target_elev_val: int = elevation_grid[target_pos.y][target_pos.x]
+		var elev_diff: int = shooter_elev - target_elev_val
 		var result := combat.resolve_combat(
 			unit, best_target, utype, target_type,
 			wi, rounds, best_dist,
 			is_moving, target_moving,
-			target_terrain, target_armor, is_suppressive)
+			target_terrain, target_armor, is_suppressive, elev_diff)
 
 		# Apply results
 		ammo_arr[wi] = current_ammo - rounds
@@ -345,6 +349,35 @@ func _resolve_unit_combat(unit: Dictionary, minutes: float) -> void:
 		if result["vehicle_damage"] > 0.0:
 			var cur_dmg: float = float(best_target.get("vehicle_damage", 0.0))
 			best_target["vehicle_damage"] = cur_dmg + result["vehicle_damage"]
+
+		# Apply mobility damage
+		var mob_result: float = float(result.get("mobility_damage", 0.0))
+		if mob_result > 0.0:
+			var cur_mob: float = float(best_target.get("mobility_damage", 0.0))
+			best_target["mobility_damage"] = clampf(cur_mob + mob_result, 0.0, 1.5)
+			if float(best_target["mobility_damage"]) >= 1.0 and best_target.get("unit_status", "") == "":
+				best_target["unit_status"] = "IMMOBILISED"
+				order_manager.cancel_order(best_target.get("name", ""))
+				combat.log_event("%s is IMMOBILISED!" % best_target.get("name", "?"))
+
+		# Apply weapon disabled
+		if result.get("weapon_disabled", false):
+			var t_ammo: Array = best_target.get("current_ammo", [])
+			# Disable a random weapon that still has ammo
+			var valid_indices: Array[int] = []
+			for ai in range(t_ammo.size()):
+				if int(t_ammo[ai]) > 0:
+					valid_indices.append(ai)
+			if not valid_indices.is_empty():
+				var disable_idx: int = valid_indices[randi() % valid_indices.size()]
+				t_ammo[disable_idx] = 0
+				best_target["current_ammo"] = t_ammo
+				var t_utype: Dictionary = unit_types.get(best_target.get("type_code", ""), {})
+				var t_weapons: Array = t_utype.get("weapons", [])
+				var disabled_name: String = "weapon"
+				if disable_idx < t_weapons.size():
+					disabled_name = str(t_weapons[disable_idx].get("name", "weapon"))
+				combat.log_event("%s: %s DISABLED by %s" % [best_target.get("name", "?"), disabled_name, uname])
 
 		# Check if target is destroyed
 		var t_crew_left: int = int(best_target.get("current_crew", 0))
@@ -436,6 +469,15 @@ func _check_morale(unit: Dictionary) -> void:
 	var base_morale: int = int(utype.get("morale", 50))
 	var penalty: int = _get_ammo_morale_penalty(unit)
 
+	# Mobility damage penalty - being immobilised in a technical is terrifying
+	var mob_dmg: float = float(unit.get("mobility_damage", 0.0))
+	if mob_dmg >= 1.0:
+		penalty += 15  # immobilised - sitting duck
+	elif mob_dmg > 0.5:
+		penalty += 8
+	elif mob_dmg > 0.0:
+		penalty += 3
+
 	# Suppression penalty (proportional, not stepped)
 	var uname: String = unit.get("name", "")
 	var supp: float = combat.get_suppression(uname)
@@ -448,7 +490,32 @@ func _check_morale(unit: Dictionary) -> void:
 		var crew_lost_pct: float = 1.0 - (float(cur_crew) / float(max_crew))
 		penalty += int(crew_lost_pct * 40)  # all crew dead = -40
 
-	var effective_morale: int = maxi(0, base_morale - penalty)
+	# Elevation morale modifier: high ground gives confidence, low ground penalizes
+	var elev_bonus: int = 0
+	if supp > 0.0:
+		var unit_pos := Vector2i(unit["col"], unit["row"])
+		var unit_elev: int = elevation_grid[unit_pos.y][unit_pos.x]
+		var unit_side: String = unit.get("side", "player")
+		var unit_type_info: Dictionary = unit_types.get(utype_code, {})
+		var spot_range: int = int(unit_type_info.get("spotting_range", 4))
+		var highest_enemy_elev: int = -999
+		var found_enemy: bool = false
+		for other in units:
+			if other.get("side", "player") == unit_side:
+				continue
+			if other.get("unit_status", "") == "DESTROYED":
+				continue
+			var other_pos := Vector2i(other["col"], other["row"])
+			if _hex_distance(unit_pos, other_pos) <= spot_range:
+				var other_elev: int = elevation_grid[other_pos.y][other_pos.x]
+				if other_elev > highest_enemy_elev:
+					highest_enemy_elev = other_elev
+				found_enemy = true
+		if found_enemy:
+			var elev_advantage: int = unit_elev - highest_enemy_elev
+			elev_bonus = elev_advantage * 5  # +5 per level above, -5 per level below
+
+	var effective_morale: int = maxi(0, base_morale - penalty + elev_bonus)
 	unit["current_morale"] = effective_morale
 
 	var status: String = unit.get("unit_status", "")
@@ -506,26 +573,47 @@ func _recover_morale(unit: Dictionary, minutes: float) -> void:
 
 func _start_break(unit: Dictionary) -> void:
 	var uname: String = unit.get("name", "")
-	# Cancel current order
 	order_manager.cancel_order(uname)
-	# Issue a withdraw order toward the nearest map edge
-	var edge_hex: Vector2i = _nearest_edge_hex(Vector2i(unit["col"], unit["row"]))
-	var utype_code: String = unit.get("type_code", "")
-	var utype: Dictionary = unit_types.get(utype_code, {})
-	order_manager.issue_order(unit, utype, Order.Type.WITHDRAW, edge_hex,
-		game_clock.game_time_minutes, Order.Posture.CAUTIOUS, Order.ROE.HOLD_FIRE)
+	# Break: driver bolts cautiously - no staff delay, immediate execution
+	var unit_pos := Vector2i(unit["col"], unit["row"])
+	var flee_hex := _flee_target(unit_pos, 3)
+	_issue_immediate_order(unit, Order.Type.WITHDRAW, flee_hex, Order.Posture.CAUTIOUS, Order.ROE.HOLD_FIRE)
 
 
 func _start_rout(unit: Dictionary) -> void:
 	var uname: String = unit.get("name", "")
-	# Cancel current order
 	order_manager.cancel_order(uname)
-	# Issue a fast withdraw toward the nearest map edge
-	var edge_hex: Vector2i = _nearest_edge_hex(Vector2i(unit["col"], unit["row"]))
-	var utype_code: String = unit.get("type_code", "")
-	var utype: Dictionary = unit_types.get(utype_code, {})
-	order_manager.issue_order(unit, utype, Order.Type.WITHDRAW, edge_hex,
-		game_clock.game_time_minutes, Order.Posture.FAST, Order.ROE.HOLD_FIRE)
+	# Rout: driver floors it - no staff delay, immediate execution
+	var unit_pos := Vector2i(unit["col"], unit["row"])
+	var flee_hex := _flee_target(unit_pos, 5)
+	_issue_immediate_order(unit, Order.Type.WITHDRAW, flee_hex, Order.Posture.FAST, Order.ROE.HOLD_FIRE)
+
+
+func _issue_immediate_order(unit: Dictionary, order_type: Order.Type, target: Vector2i,
+		posture: Order.Posture, roe: Order.ROE) -> void:
+	## Creates an order that skips staff/prep delay and starts executing immediately
+	var order := Order.new()
+	order.type = order_type
+	order.add_waypoint(target, posture, roe)
+	order.unit_name = unit.get("name", "")
+	order.issued_at = game_clock.game_time_minutes
+	order.formulation_time = 0.0
+	order.preparation_time = 0.0
+	order.status = Order.Status.EXECUTING
+	order_manager.active_orders[unit.get("name", "")] = order
+
+
+func _flee_target(from: Vector2i, distance: int) -> Vector2i:
+	## Find a hex roughly `distance` hexes toward the nearest map edge
+	var edge := _nearest_edge_hex(from)
+	# Walk toward edge but only `distance` steps
+	var current := from
+	for _i in range(distance):
+		var next := _next_step_toward(current, edge)
+		if next == current:
+			break
+		current = next
+	return current
 
 
 func _nearest_edge_hex(pos: Vector2i) -> Vector2i:
@@ -766,6 +854,10 @@ func _move_units(minutes: float) -> void:
 		if order == null or order.status != Order.Status.EXECUTING:
 			continue
 
+		# Immobilised units cannot move but can still fire
+		if float(unit.get("mobility_damage", 0.0)) >= 1.0:
+			continue
+
 		var utype_code: String = unit["type_code"]
 		var utype: Dictionary = unit_types.get(utype_code, {})
 		var speed_kmh: float = float(utype.get("speed_kmh", 40))
@@ -784,8 +876,10 @@ func _move_units(minutes: float) -> void:
 		if terrain_speed_mod <= 0.0:
 			continue  # impassable
 
-		# Effective speed in km/h
+		# Effective speed in km/h (degraded by mobility damage)
 		var effective_speed := speed_kmh * posture_speed_mod * terrain_speed_mod
+		var mob_dmg: float = float(unit.get("mobility_damage", 0.0))
+		effective_speed *= clampf(1.0 - mob_dmg, 0.0, 1.0)
 		# Distance covered this tick in km
 		var distance_km := effective_speed * (minutes / 60.0)
 		# Each hex is 0.5 km
@@ -878,28 +972,25 @@ func _next_step_toward(from: Vector2i, to: Vector2i, posture_name: String = "nor
 	var road_pref: float = pcfg.get("road_preference", 1.0)
 	var cover_pref: float = pcfg.get("cover_preference", 0.5)
 
+	var cur_dist := float(_hex_distance(from, to))
+	var found_progress := false
+
+	# First pass: try neighbors that make progress or go sideways
 	for n in neighbors:
 		if n.x < 0 or n.x >= map_cols or n.y < 0 or n.y >= map_rows:
 			continue
-
 		var dist := float(_hex_distance(n, to))
-		var cur_dist := float(_hex_distance(from, to))
-		# Must make progress or move sideways (never backwards)
 		if dist > cur_dist:
 			continue
 
 		var n_terrain: String = terrain_grid[n.y][n.x]
 		var t_info: Dictionary = terrain_types.get(n_terrain, {})
 		var speed_mod: float = float(t_info.get("speed_modifier", 1.0))
-
 		if speed_mod <= 0.0:
-			continue  # impassable
+			continue
 
-		# Distance always dominates - multiply by 10 so preferences
-		# can only matter as tie-breakers between equal-distance neighbors.
-		# Discipline scales how strong the tie-breaking preference is.
+		found_progress = true
 		var cost := dist * 10.0
-
 		if n_terrain == "S":
 			cost -= road_pref * 0.4
 		if n_terrain == "W" or n_terrain == "T":
@@ -910,6 +1001,22 @@ func _next_step_toward(from: Vector2i, to: Vector2i, posture_name: String = "nor
 		if cost < best_score:
 			best_score = cost
 			best = n
+
+	# Second pass: if stuck, allow one step backward to get unstuck
+	if not found_progress:
+		for n in neighbors:
+			if n.x < 0 or n.x >= map_cols or n.y < 0 or n.y >= map_rows:
+				continue
+			var n_terrain: String = terrain_grid[n.y][n.x]
+			var t_info: Dictionary = terrain_types.get(n_terrain, {})
+			var speed_mod: float = float(t_info.get("speed_modifier", 1.0))
+			if speed_mod <= 0.0:
+				continue
+			var dist := float(_hex_distance(n, to))
+			var cost := dist * 10.0
+			if cost < best_score:
+				best_score = cost
+				best = n
 
 	return best
 

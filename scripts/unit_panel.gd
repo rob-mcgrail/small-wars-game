@@ -283,42 +283,46 @@ func show_unit(unit: Dictionary, utype: Dictionary, order: Order = null, game_ti
 	else:
 		morale_label.add_theme_color_override("font_color", Color(0.9, 0.25, 0.2))
 
-	# Suppression
-	if suppression_val > 0.0:
-		var supp_text := "Suppression: %d%%" % int(suppression_val)
-		status_label.text = supp_text  # temporarily reuse, will be overridden below if needed
-		if suppression_val > 60:
-			status_label.add_theme_color_override("font_color", Color(0.9, 0.2, 0.1))
-		elif suppression_val > 30:
-			status_label.add_theme_color_override("font_color", Color(0.9, 0.6, 0.2))
-		else:
-			status_label.add_theme_color_override("font_color", Color(0.85, 0.85, 0.3))
-		status_label.visible = true
+	# Build status text - show everything relevant
+	var status_lines: Array[String] = []
+	var status_color := Color(0.82, 0.84, 0.78)
 
-	# Show unit status if broken/routing (overrides suppression display)
 	var unit_status: String = unit.get("unit_status", "")
-	if unit_status == "BROKEN":
-		status_label.text = "** BROKEN - WITHDRAWING **"
-		status_label.add_theme_color_override("font_color", Color(0.9, 0.5, 0.1))
-		status_label.visible = true
+	if unit_status == "DESTROYED":
+		status_lines.append("** DESTROYED **")
+		status_color = Color(0.5, 0.1, 0.1)
 	elif unit_status == "ROUTING":
-		status_label.text = "** ROUTING **"
-		status_label.add_theme_color_override("font_color", Color(0.95, 0.15, 0.1))
-		status_label.visible = true
-	elif unit_status == "DESTROYED":
-		status_label.text = "** DESTROYED **"
-		status_label.add_theme_color_override("font_color", Color(0.5, 0.1, 0.1))
+		status_lines.append("** ROUTING **")
+		status_color = Color(0.95, 0.15, 0.1)
+	elif unit_status == "BROKEN":
+		status_lines.append("** BROKEN - WITHDRAWING **")
+		status_color = Color(0.9, 0.5, 0.1)
+	elif unit_status == "IMMOBILISED" or float(unit.get("mobility_damage", 0.0)) >= 1.0:
+		status_lines.append("** IMMOBILISED **")
+		status_color = Color(0.95, 0.6, 0.1)
+
+	var vdmg: float = float(unit.get("vehicle_damage", 0.0))
+	if vdmg > 0.0:
+		status_lines.append("Vehicle: %d%% damaged" % int(vdmg * 100))
+
+	var mob_dmg_val: float = float(unit.get("mobility_damage", 0.0))
+	if mob_dmg_val > 0.0 and mob_dmg_val < 1.0:
+		status_lines.append("Mobility: %d%%" % int((1.0 - mob_dmg_val) * 100))
+
+	if suppression_val > 0.0:
+		status_lines.append("Suppression: %d%%" % int(suppression_val))
+		if unit_status == "" and suppression_val > 60:
+			status_color = Color(0.9, 0.2, 0.1)
+		elif unit_status == "" and suppression_val > 30:
+			status_color = Color(0.9, 0.6, 0.2)
+
+	if status_lines.size() > 0:
+		status_label.text = "\n".join(status_lines)
+		status_label.add_theme_color_override("font_color", status_color)
 		status_label.visible = true
 	else:
-		var vdmg: float = float(unit.get("vehicle_damage", 0.0))
-		if vdmg > 0.0:
-			var dmg_pct: int = int(vdmg * 100)
-			status_label.text = "Vehicle damage: %d%%" % dmg_pct
-			status_label.add_theme_color_override("font_color", Color(0.9, 0.5, 0.2))
-			status_label.visible = true
-		else:
-			status_label.text = ""
-			status_label.visible = false
+		status_label.text = ""
+		status_label.visible = false
 
 	var armor_val: int = utype.get("armor", 0)
 	var armor_desc := "none"
@@ -335,21 +339,21 @@ func show_unit(unit: Dictionary, utype: Dictionary, order: Order = null, game_ti
 
 	# Orders section
 	if order != null:
-		var status_color := Color(0.82, 0.84, 0.78)
+		var order_color := Color(0.82, 0.84, 0.78)
 		match order.status:
 			Order.Status.FORMULATING:
-				status_color = Color(0.85, 0.6, 0.2)
+				order_color = Color(0.85, 0.6, 0.2)
 			Order.Status.PREPARING:
-				status_color = Color(0.85, 0.85, 0.2)
+				order_color = Color(0.85, 0.85, 0.2)
 			Order.Status.EXECUTING:
-				status_color = Color(0.3, 0.85, 0.3)
+				order_color = Color(0.3, 0.85, 0.3)
 			Order.Status.COMPLETE:
-				status_color = Color(0.5, 0.55, 0.45)
+				order_color = Color(0.5, 0.55, 0.45)
 			Order.Status.COUNTERMANDED:
-				status_color = Color(0.7, 0.3, 0.3)
+				order_color = Color(0.7, 0.3, 0.3)
 
 		order_status_label.text = "Status:  %s" % order.status_string()
-		order_status_label.add_theme_color_override("font_color", status_color)
+		order_status_label.add_theme_color_override("font_color", order_color)
 		order_type_label.text = "Order:   %s" % Order.type_to_string(order.type).to_upper()
 		order_type_label.visible = true
 

@@ -34,6 +34,7 @@ unit_types:
         vs_soft: 8
         vs_armor: 1
         ammo: 500
+        platform_accuracy: 0.3   # vehicle-mounted, bouncy, exposed gunner
 
       - name: "AK-47s (crew)"
         type: rifle
@@ -45,6 +46,7 @@ unit_types:
         vs_soft: 3
         vs_armor: 0
         ammo: 900
+        platform_accuracy: 0.7   # handheld, but firing from a vehicle
 
 # Training levels: militia, irregular, regular, veteran, elite
 # Morale: 1-100 (1 = will break immediately, 100 = fanatical)
