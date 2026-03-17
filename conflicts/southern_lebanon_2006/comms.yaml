@@ -1,0 +1,10 @@
+comms:
+  motorola_hf:
+    name: "Motorola HF Radio"
+    range_km: 9.0
+  motorola_vhf:
+    name: "Motorola VHF Radio"
+    range_km: 6.0
+  harris_tac:
+    name: "Harris tactical radio"
+    range_km: 15.0

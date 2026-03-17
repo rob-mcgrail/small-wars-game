@@ -1,0 +1,22 @@
+name: "Israel Defense Forces"
+side: enemy
+
+# OODA loop
+ooda_base_cycle_minutes: 12
+
+# Night capabilities
+night:
+  spotting_modifier: 0.6
+  accuracy_modifier: 0.7
+  range_modifier: 0.8
+
+# HQ command modifiers
+hq:
+  comms_order_buff: 0.8
+  los_order_buff: 0.6
+
+# Default training/morale for this faction (can be overridden per unit)
+defaults:
+  training: regular
+  morale: 60
+  morale_recovery_per_min: 1.5

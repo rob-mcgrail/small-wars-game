@@ -1,0 +1,22 @@
+name: "Hezbollah"
+side: player
+
+# OODA loop
+ooda_base_cycle_minutes: 20
+
+# Night capabilities
+night:
+  spotting_modifier: 0.3
+  accuracy_modifier: 0.4
+  range_modifier: 0.5
+
+# HQ command modifiers
+hq:
+  comms_order_buff: 0.7
+  los_order_buff: 0.5
+
+# Default training/morale for this faction (can be overridden per unit)
+defaults:
+  training: irregular
+  morale: 65
+  morale_recovery_per_min: 1.0
