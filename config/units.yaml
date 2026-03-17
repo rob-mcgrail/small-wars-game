@@ -7,7 +7,7 @@ unit_types:
     symbol: wheeled
     speed_kmh: 80
     amphibious: false
-    spotting_range: 3
+
 
     # Crew and personnel
     crew: 4
@@ -59,7 +59,7 @@ unit_types:
     symbol: wheeled
     speed_kmh: 70
     amphibious: false
-    spotting_range: 5
+
     is_hq: true
     hq_level: 1
 
@@ -98,7 +98,7 @@ unit_types:
     symbol: wheeled
     speed_kmh: 70
     amphibious: false
-    spotting_range: 5
+
     is_hq: true
     hq_level: 2
 
@@ -137,7 +137,7 @@ unit_types:
     symbol: infantry
     speed_kmh: 5
     amphibious: false
-    spotting_range: 3
+
 
     crew: 4
     training: militia

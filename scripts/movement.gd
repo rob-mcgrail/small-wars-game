@@ -84,6 +84,10 @@ func move_units(minutes: float) -> void:
 			if current == target:
 				# Reached current waypoint - advance to next
 				if not order.advance_waypoint():
+					# ATTACK orders persist at firing position - unit holds and watches
+					if order.type == Order.Type.ATTACK:
+						unit["move_accumulator"] = 0.0
+						break
 					order.status = Order.Status.COMPLETE
 					unit["move_accumulator"] = 0.0
 					break

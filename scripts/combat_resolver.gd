@@ -370,7 +370,11 @@ func get_effective_roe(unit: Dictionary, order: Order) -> Order.ROE:
 func get_effective_spotting_range(unit: Dictionary) -> int:
 	var utype_code: String = unit.get("type_code", "")
 	var utype: Dictionary = unit_types.get(utype_code, {})
-	var base_range: int = int(utype.get("spotting_range", 4))
+	# Derive base range from optics (range_km / 0.5km per hex)
+	var optics = utype.get("optics", {})
+	var base_range: int = 4  # default fallback
+	if optics is Dictionary and not optics.is_empty():
+		base_range = int(float(optics.get("range_km", 2.0)) / 0.5)
 	var unit_pos: Vector2i = Vector2i(unit["col"], unit["row"])
 	var unit_elev: int = elevation_grid[unit_pos.y][unit_pos.x]
 	# +1 hex spotting per elevation level above the lowest terrain at the edge of base range
@@ -464,7 +468,7 @@ func check_morale(unit: Dictionary) -> void:
 		var unit_elev: int = elevation_grid[unit_pos.y][unit_pos.x]
 		var unit_side: String = unit.get("side", "player")
 		var unit_type_info: Dictionary = unit_types.get(utype_code, {})
-		var spot_range: int = int(unit_type_info.get("spotting_range", 4))
+		var spot_range: int = get_effective_spotting_range(unit)
 		var highest_enemy_elev: int = -999
 		var found_enemy: bool = false
 		for other in units:

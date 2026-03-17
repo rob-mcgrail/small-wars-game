@@ -538,6 +538,8 @@ func show_unit(unit: Dictionary, utype: Dictionary, order: Order = null, game_ti
 		order_mode_label.visible = true
 
 		order_type_label.text = "Order:   %s" % Order.type_to_string(order.type).to_upper()
+		if order.type == Order.Type.ATTACK and order.attack_target != Vector2i(-1, -1):
+			order_type_label.text += " -> (%d,%d)" % [order.attack_target.x, order.attack_target.y]
 		order_type_label.visible = true
 
 		# Show posture/ROE buttons only if order hasn't started executing and we're in orders phase

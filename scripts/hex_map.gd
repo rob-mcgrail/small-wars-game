@@ -1433,6 +1433,32 @@ func _draw() -> void:
 
 			prev_screen = wp_screen
 
+		# Draw attack target indicator
+		if order.type == Order.Type.ATTACK and order.attack_target != Vector2i(-1, -1):
+			var fp_screen := prev_screen  # last waypoint screen pos (firing position)
+			var at_hex: Vector2i = order.attack_target
+			var at_screen := (hex_grid.hex_to_pixel(at_hex.x, at_hex.y) - camera_offset / zoom_level) * zoom_level
+			# Red dashed line from firing position to target
+			var atk_color := Color(0.9, 0.2, 0.1, 0.6)
+			var atk_segments := 8
+			for i in range(atk_segments):
+				if i % 2 == 0:
+					var t0 := float(i) / atk_segments
+					var t1 := float(i + 1) / atk_segments
+					draw_line(fp_screen.lerp(at_screen, t0), fp_screen.lerp(at_screen, t1), atk_color, line_w)
+			# Crosshair on target
+			var ch_size := scaled_size * 0.3
+			draw_line(at_screen + Vector2(-ch_size, 0), at_screen + Vector2(ch_size, 0), atk_color, line_w)
+			draw_line(at_screen + Vector2(0, -ch_size), at_screen + Vector2(0, ch_size), atk_color, line_w)
+			# Circle around crosshair
+			var ch_r := ch_size * 1.2
+			var ch_prev := at_screen + Vector2(ch_r, 0)
+			for ci in range(1, 17):
+				var a := deg_to_rad(float(ci) / 16.0 * 360.0)
+				var ch_next := at_screen + Vector2(cos(a), sin(a)) * ch_r
+				draw_line(ch_prev, ch_next, atk_color, line_w * 0.7)
+				ch_prev = ch_next
+
 	# Draw last-seen enemy markers (small red circle, not hex fill)
 	for pos in last_seen_enemies:
 		var age: float = game_clock.game_time_minutes - float(last_seen_enemies[pos])
@@ -1788,7 +1814,7 @@ func _update_info_label() -> void:
 	var posture_str := Order.posture_to_string(current_posture).to_upper()
 	var roe_str := Order.roe_to_string(current_roe).to_upper()
 	var pursuit_str := Order.pursuit_to_string(current_pursuit).to_upper()
-	info_label.text = "%s (1/2/3)  |  %s (QWER)  |  %s (ZXC)  |  Cmd+Click: waypoint" % [posture_str, roe_str, pursuit_str]
+	info_label.text = "%s (1/2/3)  |  %s (QWER)  |  %s (ZXC)  |  Cmd+L: move  Cmd+R: attack" % [posture_str, roe_str, pursuit_str]
 
 	# Update unit carousel
 	_build_carousel_order()
@@ -1836,7 +1862,10 @@ func _unhandled_input(event: InputEvent) -> void:
 					_update_selected_unit()
 					queue_redraw()
 		elif mb.button_index == MOUSE_BUTTON_RIGHT:
-			is_panning = mb.pressed
+			if mb.pressed and mb.is_command_or_control_pressed():
+				_handle_attack_order(mb.position)
+			else:
+				is_panning = mb.pressed
 		elif mb.button_index == MOUSE_BUTTON_MIDDLE:
 			is_panning = mb.pressed
 		elif mb.button_index == MOUSE_BUTTON_WHEEL_UP and mb.pressed:
@@ -1957,6 +1986,102 @@ func _handle_move_order(screen_pos: Vector2) -> void:
 
 	_update_info_label()
 	queue_redraw()
+
+
+func _handle_attack_order(screen_pos: Vector2) -> void:
+	if not game_clock.is_orders_phase():
+		return
+	if selected_unit.is_empty():
+		return
+	var world_pos := screen_pos / zoom_level + camera_offset / zoom_level
+	var target := hex_grid.pixel_to_hex(world_pos)
+	if not hex_grid.is_valid_hex(target):
+		return
+	var utype_code: String = selected_unit["type_code"]
+	var utype: Dictionary = unit_types.get(utype_code, {})
+	var is_hq: bool = utype.get("is_hq", false)
+	if not is_hq and not selected_unit.get("in_comms", false):
+		return
+	if float(selected_unit.get("hq_switch_remaining", 0.0)) > 0:
+		return
+
+	# Find the best firing position
+	var firing_pos := _find_firing_position(selected_unit, target)
+	if firing_pos == Vector2i(-1, -1):
+		return  # No valid position found
+
+	var hq_mod: float = hq_comms.get_hq_order_modifier(selected_unit)
+	var order := order_manager.issue_order(
+		selected_unit, utype, Order.Type.ATTACK, firing_pos,
+		game_clock.game_time_minutes, current_posture, Order.ROE.HALT_AND_ENGAGE,
+		hq_mod, current_pursuit)
+	order.attack_target = target
+	_update_info_label()
+	queue_redraw()
+
+
+func _find_firing_position(unit: Dictionary, target: Vector2i) -> Vector2i:
+	var utype: Dictionary = unit_types.get(unit.get("type_code", ""), {})
+	var weapons: Array = utype.get("weapons", [])
+	if not (weapons is Array) or weapons.is_empty():
+		return Vector2i(-1, -1)
+
+	# Find longest weapon effective range
+	var max_range_km: float = 0.0
+	for w in weapons:
+		var r: float = float(w.get("range_km", 0))
+		if r > max_range_km:
+			max_range_km = r
+	var max_range_hexes: int = int(max_range_km / 0.5)
+	if max_range_hexes <= 0:
+		return Vector2i(-1, -1)
+
+	var unit_pos := Vector2i(unit["col"], unit["row"])
+	var target_elev: int = elevation_grid[target.y][target.x]
+	var best_pos := Vector2i(-1, -1)
+	var best_score: float = -999.0
+
+	# Evaluate hexes within weapon range of target
+	for col in range(target.x - max_range_hexes, target.x + max_range_hexes + 1):
+		for row in range(target.y - max_range_hexes, target.y + max_range_hexes + 1):
+			if col < 0 or col >= hex_grid.map_cols or row < 0 or row >= hex_grid.map_rows:
+				continue
+			var pos := Vector2i(col, row)
+			var dist_to_target: int = hex_grid.hex_distance(pos, target)
+			if dist_to_target > max_range_hexes or dist_to_target == 0:
+				continue
+			# Must have LOS to target
+			var pos_elev: int = elevation_grid[row][col]
+			if not hex_grid.has_los(pos, pos_elev, target):
+				continue
+
+			var score: float = 0.0
+			# Cover bonus
+			var terrain_code: String = terrain_grid[row][col]
+			match terrain_code:
+				"W": score += 3.0
+				"T": score += 2.0
+				"C": score += 2.0
+			# Can't use rivers or impassable terrain
+			if terrain_code == "R":
+				continue
+			var t_info: Dictionary = terrain_types.get(terrain_code, {})
+			if float(t_info.get("speed_modifier", 1.0)) <= 0.0:
+				continue
+			# Elevation advantage
+			score += float(pos_elev - target_elev) * 1.0
+			# Prefer closer to current position (less travel time)
+			var dist_from_unit: int = hex_grid.hex_distance(unit_pos, pos)
+			score -= float(dist_from_unit) * 0.3
+			# Prefer being at optimal range (not too close)
+			if dist_to_target >= 2:
+				score += 1.0  # some standoff is good
+
+			if score > best_score:
+				best_score = score
+				best_pos = pos
+
+	return best_pos
 
 
 func _zoom(step: float, mouse_pos: Vector2) -> void:

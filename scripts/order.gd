@@ -63,6 +63,9 @@ var formulated_at: float = 0.0
 var prepared_at: float = 0.0
 var was_countermanded: bool = false
 
+# Attack target hex (separate from waypoints which define the route to the firing position)
+var attack_target: Vector2i = Vector2i(-1, -1)
+
 # The unit this order is for
 var unit_name: String = ""
 
