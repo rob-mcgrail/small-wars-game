@@ -118,7 +118,7 @@ hq:
 # Unit destruction effects
 destruction:
   # Death marker duration in game minutes
-  marker_duration_minutes: 60
+  marker_duration_minutes: 120
   # Morale shock when a friendly unit is destroyed
   direct_hq_morale_shock: 15
   parent_hq_morale_shock: 8

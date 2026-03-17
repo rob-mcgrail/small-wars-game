@@ -1045,11 +1045,13 @@ func _abandon_vehicle(unit: Dictionary) -> void:
 	var uname: String = unit.get("name", "?")
 	combat.log_event("%s crew abandoning vehicle!" % uname)
 
-	# Mark the vehicle as destroyed
+	# Mark the vehicle as destroyed - zero out crew and morale
 	unit["unit_status"] = "DESTROYED"
+	unit["current_crew"] = 0
+	unit["current_morale"] = 0
 	order_manager.cancel_order(uname)
 
-	# Place death marker for the vehicle
+	# Place death marker for the vehicle (stays for 2 hours)
 	var pos := Vector2i(unit["col"], unit["row"])
 	death_markers[pos] = game_clock.game_time_minutes
 
@@ -1077,7 +1079,7 @@ func _abandon_vehicle(unit: Dictionary) -> void:
 		"row": pos.y,
 		"name": infantry_name,
 		"side": side,
-		"default_roe": "hold fire",
+		"default_roe": "return fire",
 	}
 	_init_unit_ammo_and_morale(infantry)
 
@@ -2407,6 +2409,9 @@ func _draw() -> void:
 	# Draw units on top
 	if show_units:
 		for unit in units:
+			# Don't draw destroyed units - death marker handles their visual
+			if unit.get("unit_status", "") == "DESTROYED":
+				continue
 			var unit_side: String = unit.get("side", "player")
 			# Fog of war: skip enemy units that aren't currently spotted
 			if unit_side == "enemy":
@@ -2604,6 +2609,13 @@ func _draw_unit_counter(center: Vector2, hex_sz: float, utype: Dictionary, uname
 				draw_line(wprev, wnext, sym_color, line_w)
 				wprev = wnext
 
+	elif sym == "infantry":
+		# NATO infantry symbol: an X inside the counter
+		var ix := s * 0.45
+		var iy := s * 0.35
+		draw_line(center + Vector2(-ix, -iy), center + Vector2(ix, iy), sym_color, line_w)
+		draw_line(center + Vector2(ix, -iy), center + Vector2(-ix, iy), sym_color, line_w)
+
 	# HQ text overlay
 	if utype.get("is_hq", false) and hex_sz > 12:
 		var hq_font := ThemeDB.fallback_font
@@ -2625,10 +2637,15 @@ func _draw_unit_counter(center: Vector2, hex_sz: float, utype: Dictionary, uname
 
 
 func _get_unit_at(coord: Vector2i) -> Dictionary:
+	# Prefer living units over destroyed ones
+	var destroyed_unit: Dictionary = {}
 	for unit in units:
-		if unit["col"] == coord.x and unit["row"] == coord.y:
-			return unit
-	return {}
+		if int(unit["col"]) == coord.x and int(unit["row"]) == coord.y:
+			if unit.get("unit_status", "") == "DESTROYED":
+				destroyed_unit = unit
+			else:
+				return unit
+	return destroyed_unit
 
 
 func _update_selected_unit() -> void:

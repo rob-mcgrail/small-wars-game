@@ -1,9 +1,19 @@
-# How to allow for resupply for ammo
+# Resupply
 
-# Let's track fuel for motorized units.
+## Ammo types
+Each weapon should have an `ammo_type` field (e.g. "7.62x39", "12.7x108") to determine compatibility. Units can only resupply weapons that share ammo types. This enables:
+- Sharing ammo between friendly units with compatible weapons
+- Scavenging from wrecks
 
-- being within 1 hex of a town or city (or on the town or city) gives you a 10% chance per 10 minutes of becoming fully refueled.
-- being within 1 hex of a town or city gives you a 5% chance per 10 minutes of increasing your rifle ammo? or is that very unreallistic. discuss.
+## Scavenging from wrecked vehicles
+When a friendly unit stops on a hex adjacent to a destroyed vehicle wreck (death marker), it should be able to scavenge remaining ammo. The wreck retains whatever ammo the vehicle had when destroyed. Only compatible ammo types can be taken. Takes time (10-15 minutes?), unit is stationary and vulnerable during resupply.
+
+## Town/city resupply
+- Being within 1 hex of a town or city gives a chance per 10 minutes of scavenging common ammo types (rifle ammo mainly)
+- Fuel resupply near towns/cities for motorized units
+
+## Fuel
+Track fuel for motorized units. Running out immobilises the vehicle (different from combat immobilisation - crew is fine, just no fuel).
 
 # ATTACK order
 

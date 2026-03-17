@@ -450,8 +450,22 @@ func show_unit(unit: Dictionary, utype: Dictionary, order: Order = null, game_ti
 		var comms_range: float = float(comms_data.get("range_km", 0))
 		spotting_label.text += "\nComms:    %s (%.0fkm)" % [comms_name, comms_range]
 
-	# Orders section
-	if order != null:
+	# Orders section - destroyed units show no orders
+	var unit_status_val: String = unit.get("unit_status", "")
+	if unit_status_val == "DESTROYED":
+		order_status_label.text = "Wreck"
+		order_status_label.add_theme_color_override("font_color", Color(0.4, 0.3, 0.25))
+		order_mode_label.text = ""
+		order_mode_label.visible = false
+		order_type_label.visible = false
+		order_timing_label.visible = false
+		order_detail_label.visible = false
+		clear_order_button.visible = false
+		posture_container.visible = false
+		roe_container.visible = false
+		pursuit_container.visible = false
+		_clear_waypoint_labels()
+	elif order != null:
 		var order_color := Color(0.82, 0.84, 0.78)
 		match order.status:
 			Order.Status.FORMULATING:

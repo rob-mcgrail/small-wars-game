@@ -134,7 +134,7 @@ unit_types:
     code: INF
     description: "Dismounted vehicle crew on foot"
     icon_color: "#8a7a4a"
-    symbol: wheeled
+    symbol: infantry
     speed_kmh: 5
     amphibious: false
     spotting_range: 3
