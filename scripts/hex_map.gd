@@ -151,7 +151,8 @@ var death_markers: Dictionary = {}
 # Fog of war mode: "full_knowledge", "satellite", "approximate", "total"
 var fog_of_war_mode: String = "approximate"
 var satellite_range: int = 6
-var revealed_hexes: Dictionary = {}  # Vector2i -> true
+var revealed_hexes: Dictionary = {}  # Vector2i -> true (terrain visible)
+var elevation_revealed: Dictionary = {}  # Vector2i -> true (elevation number visible)
 var spotted_enemies: Dictionary = {}  # unit name -> Vector2i (current spotted position)
 var last_seen_enemies: Dictionary = {}  # Vector2i -> float (game_time when enemy was last seen there)
 const LAST_SEEN_DURATION: float = 30.0  # minutes before last-seen marker fades
@@ -1604,28 +1605,32 @@ func _init_fog_of_war() -> void:
 	## Pre-reveal hexes based on fog_of_war_mode
 	match fog_of_war_mode:
 		"full_knowledge":
-			# Reveal everything - local knowledge, know every hill and grove
+			# Local knowledge - know every hill, every grove, every elevation
+			for row in range(map_rows):
+				for col in range(map_cols):
+					var pos := Vector2i(col, row)
+					revealed_hexes[pos] = true
+					elevation_revealed[pos] = true
+		"satellite":
+			# Satellite: all terrain types visible everywhere (can see forests vs fields)
+			# But elevation only accurate near mapped infrastructure
 			for row in range(map_rows):
 				for col in range(map_cols):
 					revealed_hexes[Vector2i(col, row)] = true
-		"satellite":
-			# Satellite imaging: all terrain types visible everywhere,
-			# but elevation detail only within satellite_range of roads/towns
-			# Reveal hexes near infrastructure with full detail
+			# Elevation only near roads/towns/cities/rivers
 			for row in range(map_rows):
 				for col in range(map_cols):
 					var code: String = terrain_grid[row][col]
 					if code == "S" or code == "T" or code == "C" or code == "R":
-						# Infrastructure hex + surroundings get full reveal
 						for dc in range(-satellite_range, satellite_range + 1):
 							for dr in range(-satellite_range, satellite_range + 1):
 								var c: int = col + dc
 								var r: int = row + dr
 								if c >= 0 and c < map_cols and r >= 0 and r < map_rows:
 									if hex_grid.hex_distance(Vector2i(col, row), Vector2i(c, r)) <= satellite_range:
-										revealed_hexes[Vector2i(c, r)] = true
+										elevation_revealed[Vector2i(c, r)] = true
 		"approximate":
-			# Default: infrastructure visible, rest hidden until scouted
+			# Infrastructure visible, rest hidden. No elevation until scouted.
 			pass
 		"total":
 			# Nothing visible until scouted
@@ -1648,6 +1653,7 @@ func _update_fog_of_war() -> void:
 				var hex_coord := Vector2i(c, r)
 				if hex_grid.hex_distance(unit_pos, hex_coord) <= reveal_range:
 					revealed_hexes[hex_coord] = true
+					elevation_revealed[hex_coord] = true  # boots on ground = know the terrain
 
 	# 2. Find currently spotted enemy units
 	var new_spotted: Dictionary = {}
@@ -1867,8 +1873,11 @@ func _draw() -> void:
 			if code in terrain_types:
 				base_color = terrain_types[code]["color"]
 
-			# Apply elevation shading
-			var shade := lerpf(elev_min_shade, elev_max_shade, elev / 9.0)
+			# Apply elevation shading (only if elevation is known)
+			var hex_coord := Vector2i(col, row)
+			var shade := 0.0
+			if hex_coord in elevation_revealed:
+				shade = lerpf(elev_min_shade, elev_max_shade, elev / 9.0)
 			var color := Color(
 				clampf(base_color.r + shade, 0, 1),
 				clampf(base_color.g + shade, 0, 1),
@@ -1876,7 +1885,6 @@ func _draw() -> void:
 			)
 
 			# Fog of war: check if hex is revealed
-			var hex_coord := Vector2i(col, row)
 			var always_known := false
 			if fog_of_war_mode != "total":
 				always_known = code == "S" or code == "T" or code == "C" or code == "R"
@@ -1892,7 +1900,7 @@ func _draw() -> void:
 			if scaled_size > 10 and is_revealed:
 				var font := ThemeDB.fallback_font
 				var label_size := int(clampf(scaled_size * 0.22, 7, 14))
-				if show_elevation:
+				if show_elevation and hex_coord in elevation_revealed:
 					var elev_text := str(elev)
 					var text_sz := font.get_string_size(elev_text, HORIZONTAL_ALIGNMENT_CENTER, -1, label_size)
 					var elev_pos := center + Vector2(-text_sz.x * 0.5, -scaled_size * 0.35)
