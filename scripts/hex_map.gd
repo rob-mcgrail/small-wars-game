@@ -79,6 +79,9 @@ var game_flow_panel: GameFlowPanel
 var order_manager: OrderManager
 var combat: Combat
 var hex_grid: HexGrid
+var combat_resolver: CombatResolver
+var movement: Movement
+var hq_comms: HQComms
 
 # Display toggles
 var show_los := true
@@ -355,897 +358,6 @@ func _init_unit_ammo_and_morale(unit: Dictionary) -> void:
 	unit["hq_switch_remaining"] = 0.0
 
 
-func _get_effective_roe(unit: Dictionary, order: Order) -> Order.ROE:
-	# If unit is broken or routing, effective ROE is hold fire
-	var status: String = unit.get("unit_status", "")
-	if status == "BROKEN" or status == "ROUTING":
-		return Order.ROE.HOLD_FIRE
-	# If all weapons empty, effective ROE is hold fire
-	var ammo_arr: Array = unit.get("current_ammo", [])
-	var all_empty: bool = true
-	for a in ammo_arr:
-		if int(a) > 0:
-			all_empty = false
-			break
-	if all_empty and ammo_arr.size() > 0:
-		return Order.ROE.HOLD_FIRE
-	if order == null:
-		# Units without orders default to return fire
-		# Check for a standing ROE on the unit dict
-		var default_roe: String = unit.get("default_roe", "return fire")
-		return Order.roe_from_string(default_roe)
-	return order.roe
-
-
-func _update_hq_comms(minutes: float) -> void:
-	for unit in units:
-		if unit.get("unit_status", "") == "DESTROYED":
-			continue
-		var switch_remaining: float = float(unit.get("hq_switch_remaining", 0.0))
-		if switch_remaining > 0:
-			unit["hq_switch_remaining"] = maxf(0.0, switch_remaining - minutes)
-			unit["in_comms"] = false
-			unit["in_hq_los"] = false
-			continue
-		var assigned_hq_name: String = unit.get("assigned_hq", "")
-		if assigned_hq_name == "":
-			unit["in_comms"] = false
-			unit["in_hq_los"] = false
-			continue
-		# Find the assigned HQ unit
-		var hq_unit: Dictionary = {}
-		for other in units:
-			if other.get("name", "") == assigned_hq_name:
-				hq_unit = other
-				break
-		if hq_unit.is_empty() or hq_unit.get("unit_status", "") == "DESTROYED":
-			unit["in_comms"] = false
-			unit["in_hq_los"] = false
-			continue
-		# Get HQ unit type's comms range
-		var hq_type_code: String = hq_unit.get("type_code", "")
-		var hq_utype: Dictionary = unit_types.get(hq_type_code, {})
-		var comms_data: Dictionary = hq_utype.get("comms", {})
-		var comms_range_km: float = float(comms_data.get("range_km", 0))
-		var comms_range_hexes: float = comms_range_km / 0.5
-		# Calculate hex distance
-		var unit_pos := Vector2i(unit["col"], unit["row"])
-		var hq_pos := Vector2i(hq_unit["col"], hq_unit["row"])
-		var distance: int = hex_grid.hex_distance(unit_pos, hq_pos)
-		unit["in_comms"] = float(distance) <= comms_range_hexes
-
-		# If out of comms, try to find another friendly HQ in range
-		if not unit.get("in_comms", false):
-			var best_hq_name := ""
-			var best_hq_dist := 9999
-			var unit_side: String = unit.get("side", "player")
-			for other in units:
-				if other.get("side", "player") != unit_side:
-					continue
-				if other == unit:
-					continue
-				if other.get("unit_status", "") == "DESTROYED":
-					continue
-				var other_utype: Dictionary = unit_types.get(other.get("type_code", ""), {})
-				if not other_utype.get("is_hq", false):
-					continue
-				if other.get("name", "") == assigned_hq_name:
-					continue  # already checked this one
-				var other_comms = other_utype.get("comms", {})
-				if not (other_comms is Dictionary) or other_comms.is_empty():
-					continue
-				var other_range: float = float(other_comms.get("range_km", 0)) / 0.5
-				var other_pos := Vector2i(other["col"], other["row"])
-				var other_dist: int = hex_grid.hex_distance(unit_pos, other_pos)
-				if float(other_dist) <= other_range and other_dist < best_hq_dist:
-					best_hq_dist = other_dist
-					best_hq_name = other.get("name", "")
-			if best_hq_name != "":
-				unit["assigned_hq"] = best_hq_name
-				unit["hq_switch_remaining"] = hq_auto_switch_minutes
-				unit["in_comms"] = false
-				unit["in_hq_los"] = false
-				combat.log_event("%s switching to %s (10 min)" % [
-					unit.get("name", "?"), best_hq_name])
-				continue
-
-		# LOS check is independent of comms - within spotting range and can see HQ
-		var unit_spot: int = _get_effective_spotting_range(unit)
-		var unit_elev: int = elevation_grid[unit_pos.y][unit_pos.x]
-		unit["in_hq_los"] = distance <= unit_spot and hex_grid.has_los(unit_pos, unit_elev, hq_pos)
-
-
-func _get_hq_order_modifier(unit: Dictionary) -> float:
-	if unit.get("in_hq_los", false):
-		return hq_los_order_buff
-	if unit.get("in_comms", false):
-		return hq_comms_order_buff
-	return 1.0
-
-
-func _get_hq_accuracy_modifier(unit: Dictionary) -> float:
-	if unit.get("in_hq_los", false):
-		return hq_los_accuracy_buff
-	return 1.0
-
-
-func _get_hq_suppression_modifier(unit: Dictionary) -> float:
-	if unit.get("in_hq_los", false):
-		return hq_los_suppression_resistance
-	return 1.0
-
-
-func _resolve_unit_combat(unit: Dictionary, minutes: float) -> void:
-	var uname: String = unit.get("name", "")
-	if unit.get("unit_status", "") == "DESTROYED":
-		return
-
-	var order: Order = order_manager.get_order(uname)
-	var roe: Order.ROE = _get_effective_roe(unit, order)
-
-	if roe == Order.ROE.HOLD_FIRE:
-		return
-
-	var targets := _find_targets_in_range(unit)
-	if targets.is_empty():
-		return
-
-	# Halt & Engage only fires when stopped
-	if roe == Order.ROE.HALT_AND_ENGAGE:
-		if order != null and order.status == Order.Status.EXECUTING:
-			return
-
-	# Return Fire needs someone shooting at us
-	if roe == Order.ROE.RETURN_FIRE:
-		var being_engaged := false
-		for target in targets:
-			var t_order: Order = order_manager.get_order(target.get("name", ""))
-			var t_roe: Order.ROE = _get_effective_roe(target, t_order)
-			if t_roe == Order.ROE.FIRE_AT_WILL or t_roe == Order.ROE.HALT_AND_ENGAGE:
-				being_engaged = true
-				break
-		if not being_engaged:
-			return
-
-	var utype_code: String = unit.get("type_code", "")
-	var utype: Dictionary = unit_types.get(utype_code, {})
-	var weapons: Array = utype.get("weapons", [])
-	var ammo_arr: Array = unit.get("current_ammo", [])
-	var unit_pos := Vector2i(unit["col"], unit["row"])
-	var is_moving := order != null and order.status == Order.Status.EXECUTING
-
-	# ROE multiplier on each weapon's rate_of_fire
-	var roe_mult: float = 0.0
-	match roe:
-		Order.ROE.FIRE_AT_WILL:
-			roe_mult = ROE_RATE_FIRE_AT_WILL
-		Order.ROE.RETURN_FIRE:
-			roe_mult = ROE_RATE_RETURN_FIRE
-		Order.ROE.HALT_AND_ENGAGE:
-			roe_mult = ROE_RATE_HALT_AND_ENGAGE
-
-	# Crew casualties reduce fire rate
-	var crew_ratio: float = 1.0
-	var max_crew: int = int(utype.get("crew", 4))
-	var cur_crew: int = int(unit.get("current_crew", max_crew))
-	if max_crew > 0:
-		crew_ratio = clampf(float(cur_crew) / float(max_crew), 0.0, 1.0)
-	if cur_crew <= 0:
-		return  # No crew left
-
-	var fired_any := false
-
-	for wi in range(weapons.size()):
-		if wi >= ammo_arr.size():
-			continue
-		var current_ammo: int = int(ammo_arr[wi])
-		if current_ammo <= 0:
-			continue
-
-		var w: Dictionary = weapons[wi]
-		var w_range_km: float = float(w.get("range_km", 0))
-		var w_supp_range_km: float = float(w.get("suppressive_range_km", w_range_km))
-		if is_moving:
-			w_range_km = float(w.get("range_moving_km", w_range_km * 0.3))
-			w_supp_range_km = w_range_km  # no suppressive bonus while moving
-		# Night reduces effective engagement ranges
-		if _is_night() and not _unit_has_night_vision(unit):
-			w_range_km *= night_range_modifier
-			w_supp_range_km *= night_range_modifier
-		# Max engagement range is the suppressive range
-		var w_max_range_hexes: float = w_supp_range_km / 0.5
-		var w_effective_range_hexes: float = w_range_km / 0.5
-
-		# Find closest valid target for this weapon (within suppressive range)
-		var best_target: Dictionary = {}
-		var best_dist: int = 999
-		for target in targets:
-			if target.get("unit_status", "") == "DESTROYED":
-				continue
-			var t_pos := Vector2i(target["col"], target["row"])
-			var dist: int = hex_grid.hex_distance(unit_pos, t_pos)
-			if float(dist) <= w_max_range_hexes and dist < best_dist:
-				best_dist = dist
-				best_target = target
-
-		if best_target.is_empty():
-			continue
-
-		# Calculate rounds fired this tick
-		# Weapon RoF * ROE multiplier * time * crew ratio * conservation
-		var rof: float = float(w.get("rate_of_fire", 600))
-		# Troops conserve ammo as it gets low
-		var max_ammo: int = 0
-		var w_weapons: Array = utype.get("weapons", [])
-		if wi < w_weapons.size():
-			max_ammo = int(w_weapons[wi].get("ammo", 0))
-		var ammo_pct: float = float(current_ammo) / maxf(1.0, float(max_ammo))
-		var conservation: float = 1.0
-		if ammo_pct < 0.5:
-			# Linear taper: at 50% fire at full rate, at 10% fire at 20%, at 0% don't fire
-			conservation = clampf(ammo_pct / 0.5, 0.2, 1.0)
-		var rounds_f: float = rof * roe_mult * minutes * crew_ratio * conservation
-		var rounds: int = int(rounds_f)
-		# Stochastic rounding for fractional rounds
-		if randf() < (rounds_f - float(rounds)):
-			rounds += 1
-		rounds = mini(rounds, current_ammo)
-		if rounds <= 0:
-			continue
-
-		# Resolve each shot
-		var target_pos := Vector2i(best_target["col"], best_target["row"])
-		var target_terrain: String = terrain_grid[target_pos.y][target_pos.x]
-		var target_type_code: String = best_target.get("type_code", "")
-		var target_type: Dictionary = unit_types.get(target_type_code, {})
-		var target_armor: int = int(target_type.get("armor", 0))
-		var target_order: Order = order_manager.get_order(best_target.get("name", ""))
-		var target_moving := target_order != null and target_order.status == Order.Status.EXECUTING
-
-		var is_suppressive := float(best_dist) > w_effective_range_hexes
-		var shooter_elev: int = elevation_grid[unit_pos.y][unit_pos.x]
-		var target_elev_val: int = elevation_grid[target_pos.y][target_pos.x]
-		var elev_diff: int = shooter_elev - target_elev_val
-		var hq_acc: float = _get_hq_accuracy_modifier(unit)
-		# Night penalty on accuracy
-		var night_acc: float = 1.0
-		if _is_night() and not _unit_has_night_vision(unit):
-			night_acc = night_accuracy_modifier
-		var total_acc: float = hq_acc * night_acc
-		var result := combat.resolve_combat(
-			unit, best_target, utype, target_type,
-			wi, rounds, best_dist,
-			is_moving, target_moving,
-			target_terrain, target_armor, is_suppressive, elev_diff, total_acc)
-
-		# Apply results
-		ammo_arr[wi] = current_ammo - rounds
-		fired_any = true
-
-		if result["hits"] > 0 or result["suppression_added"] > 0:
-			var t_name: String = best_target.get("name", "?")
-			var supp_mod: float = _get_hq_suppression_modifier(best_target)
-			combat.apply_suppression(t_name, result["suppression_added"] * supp_mod)
-
-		if result["crew_killed"] > 0:
-			var t_crew: int = int(best_target.get("current_crew", 4))
-			best_target["current_crew"] = maxi(0, t_crew - result["crew_killed"])
-			combat.log_event("%s hit %s: %d casualties" % [
-				uname, best_target.get("name", "?"), result["crew_killed"]])
-
-		if result["vehicle_damage"] > 0.0:
-			var cur_dmg: float = float(best_target.get("vehicle_damage", 0.0))
-			best_target["vehicle_damage"] = cur_dmg + result["vehicle_damage"]
-
-		# Apply mobility damage
-		var mob_result: float = float(result.get("mobility_damage", 0.0))
-		if mob_result > 0.0:
-			var cur_mob: float = float(best_target.get("mobility_damage", 0.0))
-			best_target["mobility_damage"] = clampf(cur_mob + mob_result, 0.0, 1.5)
-			if float(best_target["mobility_damage"]) >= 1.0 and best_target.get("unit_status", "") == "":
-				best_target["unit_status"] = "IMMOBILISED"
-				order_manager.cancel_order(best_target.get("name", ""))
-				combat.log_event("%s is IMMOBILISED!" % best_target.get("name", "?"))
-
-		# Apply weapon disabled
-		if result.get("weapon_disabled", false):
-			var t_ammo: Array = best_target.get("current_ammo", [])
-			# Disable a random weapon that still has ammo
-			var valid_indices: Array[int] = []
-			for ai in range(t_ammo.size()):
-				if int(t_ammo[ai]) > 0:
-					valid_indices.append(ai)
-			if not valid_indices.is_empty():
-				var disable_idx: int = valid_indices[randi() % valid_indices.size()]
-				t_ammo[disable_idx] = 0
-				best_target["current_ammo"] = t_ammo
-				var t_utype: Dictionary = unit_types.get(best_target.get("type_code", ""), {})
-				var t_weapons: Array = t_utype.get("weapons", [])
-				var disabled_name: String = "weapon"
-				if disable_idx < t_weapons.size():
-					disabled_name = str(t_weapons[disable_idx].get("name", "weapon"))
-				combat.log_event("%s: %s DISABLED by %s" % [best_target.get("name", "?"), disabled_name, uname])
-
-		# Check if target is destroyed or should abandon vehicle
-		var t_crew_left: int = int(best_target.get("current_crew", 0))
-		var t_dmg: float = float(best_target.get("vehicle_damage", 0.0))
-		var t_mob_dmg: float = float(best_target.get("mobility_damage", 0.0))
-		if t_crew_left <= 0 or t_dmg >= 1.0:
-			if best_target.get("unit_status", "") != "DESTROYED":
-				best_target["unit_status"] = "DESTROYED"
-				order_manager.cancel_order(best_target.get("name", ""))
-				combat.log_event("%s DESTROYED by %s" % [best_target.get("name", "?"), uname])
-				_on_unit_destroyed(best_target)
-		elif t_crew_left > 0:
-			# Vehicle abandonment - thresholds are lower when broken/routing
-			var t_status: String = best_target.get("unit_status", "")
-			var abandon_vdmg: float = 0.7
-			var abandon_mob: float = 0.8
-			if t_status == "ROUTING":
-				abandon_vdmg = 0.35
-				abandon_mob = 0.4
-			elif t_status == "BROKEN":
-				abandon_vdmg = 0.5
-				abandon_mob = 0.6
-			if (t_dmg >= abandon_vdmg or t_mob_dmg >= abandon_mob) and t_status != "DESTROYED":
-				_abandon_vehicle(best_target)
-
-		if rounds > 0:
-			# Create fire effect visual
-			fire_effects.append({
-				"from": Vector2i(unit["col"], unit["row"]),
-				"to": target_pos,
-				"time_remaining": FIRE_EFFECT_DURATION,
-				"hit": result["hits"] > 0,
-			})
-		if result["hits"] > 0:
-			var w_name: String = w.get("name", "?")
-			combat.log_event("%s fires %s: %d rounds, %d hits on %s" % [
-				uname, w_name, rounds, result["hits"], best_target.get("name", "?")])
-
-	unit["current_ammo"] = ammo_arr
-	if fired_any:
-		_check_morale(unit)
-
-
-func _get_effective_spotting_range(unit: Dictionary) -> int:
-	var utype_code: String = unit.get("type_code", "")
-	var utype: Dictionary = unit_types.get(utype_code, {})
-	var base_range: int = int(utype.get("spotting_range", 4))
-	var unit_pos := Vector2i(unit["col"], unit["row"])
-	var unit_elev: int = elevation_grid[unit_pos.y][unit_pos.x]
-	# +1 hex spotting per elevation level above the lowest terrain at the edge of base range
-	# Simulates being able to see further into low ground from a hilltop
-	var min_elev_at_edge: int = unit_elev
-	for dc in range(-base_range, base_range + 1):
-		for dr in range(-base_range, base_range + 1):
-			var c := unit_pos.x + dc
-			var r := unit_pos.y + dr
-			if c >= 0 and c < map_cols and r >= 0 and r < map_rows:
-				var d: int = hex_grid.hex_distance(unit_pos, Vector2i(c, r))
-				if d >= base_range - 1 and d <= base_range:
-					var e: int = elevation_grid[r][c]
-					if e < min_elev_at_edge:
-						min_elev_at_edge = e
-	var elev_bonus: int = maxi(0, unit_elev - min_elev_at_edge)
-	var total := base_range + elev_bonus
-	# Night penalty
-	if _is_night() and not _unit_has_night_vision(unit):
-		total = maxi(1, int(float(total) * night_spotting_modifier))
-	return total
-
-
-func _find_targets_in_range(unit: Dictionary) -> Array:
-	var utype_code: String = unit.get("type_code", "")
-	var utype: Dictionary = unit_types.get(utype_code, {})
-	var unit_pos := Vector2i(unit["col"], unit["row"])
-	var unit_side: String = unit.get("side", "player")
-	var spot_range: int = _get_effective_spotting_range(unit)
-	var unit_elev: int = elevation_grid[unit_pos.y][unit_pos.x]
-
-	var targets: Array = []
-	for other in units:
-		if other.get("side", "player") == unit_side:
-			continue
-		var other_pos := Vector2i(other["col"], other["row"])
-		if hex_grid.hex_distance(unit_pos, other_pos) > spot_range:
-			continue
-		if hex_grid.has_los(unit_pos, unit_elev, other_pos):
-			targets.append(other)
-	return targets
-
-
-func _get_lowest_ammo_pct(unit: Dictionary) -> float:
-	var ammo_arr: Array = unit.get("current_ammo", [])
-	var utype_code: String = unit.get("type_code", "")
-	var utype: Dictionary = unit_types.get(utype_code, {})
-	var weapons: Array = utype.get("weapons", [])
-	if ammo_arr.is_empty():
-		return 1.0
-	var lowest: float = 1.0
-	for i in range(ammo_arr.size()):
-		var max_ammo: int = 0
-		if i < weapons.size():
-			max_ammo = int(weapons[i].get("ammo", 0))
-		if max_ammo <= 0:
-			continue
-		var pct: float = float(int(ammo_arr[i])) / float(max_ammo)
-		if pct < lowest:
-			lowest = pct
-	return lowest
-
-
-func _get_ammo_morale_penalty(unit: Dictionary) -> int:
-	var ammo_arr: Array = unit.get("current_ammo", [])
-	var utype_code: String = unit.get("type_code", "")
-	var utype: Dictionary = unit_types.get(utype_code, {})
-	var weapons: Array = utype.get("weapons", [])
-	if not (weapons is Array) or weapons.is_empty():
-		return 0
-
-	# Use average ammo percentage across all weapons
-	var total_pct: float = 0.0
-	var count: int = 0
-	var all_empty: bool = true
-	for i in range(ammo_arr.size()):
-		var max_ammo: int = 0
-		if i < weapons.size():
-			max_ammo = int(weapons[i].get("ammo", 0))
-		if max_ammo <= 0:
-			continue
-		var cur: int = int(ammo_arr[i])
-		if cur > 0:
-			all_empty = false
-		total_pct += float(cur) / float(max_ammo)
-		count += 1
-
-	if all_empty and count > 0:
-		return 25
-	if count == 0:
-		return 0
-	var avg_pct: float = total_pct / float(count)
-	if avg_pct < 0.15:
-		return 15
-	elif avg_pct < 0.30:
-		return 10
-	elif avg_pct < 0.50:
-		return 5
-	return 0
-
-
-func _check_morale(unit: Dictionary) -> void:
-	var utype_code: String = unit.get("type_code", "")
-	var utype: Dictionary = unit_types.get(utype_code, {})
-	var base_morale: int = int(utype.get("morale", 50))
-	var morale_dmg: int = int(unit.get("morale_damage", 0))
-	var penalty: int = morale_dmg + _get_ammo_morale_penalty(unit)
-
-	# Mobility damage penalty - being immobilised in a technical is terrifying
-	var mob_dmg: float = float(unit.get("mobility_damage", 0.0))
-	if mob_dmg >= 1.0:
-		penalty += 15  # immobilised - sitting duck
-	elif mob_dmg > 0.5:
-		penalty += 8
-	elif mob_dmg > 0.0:
-		penalty += 3
-
-	# Suppression penalty (proportional, not stepped)
-	var uname: String = unit.get("name", "")
-	var supp: float = combat.get_suppression(uname)
-	penalty += int(supp * 0.3)  # 100% suppression = -30 morale
-
-	# No HQ penalty - fighting alone is demoralising
-	if not unit.get("in_comms", false) and not utype.get("is_hq", false):
-		penalty += 10
-
-	# Crew loss penalty (proportional)
-	var max_crew: int = int(utype.get("crew", 4))
-	var cur_crew: int = int(unit.get("current_crew", max_crew))
-	if max_crew > 0:
-		var crew_lost_pct: float = 1.0 - (float(cur_crew) / float(max_crew))
-		penalty += int(crew_lost_pct * 40)  # all crew dead = -40
-
-	# Proximity to enemy while damaged - sitting duck panic
-	var vdmg: float = float(unit.get("vehicle_damage", 0.0))
-	if vdmg > 0.3 or mob_dmg > 0.3:
-		var unit_pos_check := Vector2i(unit["col"], unit["row"])
-		var unit_side_check: String = unit.get("side", "player")
-		var enemy_close := false
-		for other in units:
-			if other.get("side", "player") == unit_side_check:
-				continue
-			if other.get("unit_status", "") == "DESTROYED":
-				continue
-			var other_pos := Vector2i(other["col"], other["row"])
-			if hex_grid.hex_distance(unit_pos_check, other_pos) <= 3:
-				enemy_close = true
-				break
-		if enemy_close:
-			var damage_panic: int = int((vdmg + mob_dmg) * 15)
-			penalty += damage_panic
-
-	# Elevation morale modifier: high ground gives confidence, low ground penalizes
-	var elev_bonus: int = 0
-	if supp > 0.0:
-		var unit_pos := Vector2i(unit["col"], unit["row"])
-		var unit_elev: int = elevation_grid[unit_pos.y][unit_pos.x]
-		var unit_side: String = unit.get("side", "player")
-		var unit_type_info: Dictionary = unit_types.get(utype_code, {})
-		var spot_range: int = int(unit_type_info.get("spotting_range", 4))
-		var highest_enemy_elev: int = -999
-		var found_enemy: bool = false
-		for other in units:
-			if other.get("side", "player") == unit_side:
-				continue
-			if other.get("unit_status", "") == "DESTROYED":
-				continue
-			var other_pos := Vector2i(other["col"], other["row"])
-			if hex_grid.hex_distance(unit_pos, other_pos) <= spot_range:
-				var other_elev: int = elevation_grid[other_pos.y][other_pos.x]
-				if other_elev > highest_enemy_elev:
-					highest_enemy_elev = other_elev
-				found_enemy = true
-		if found_enemy:
-			var elev_advantage: int = unit_elev - highest_enemy_elev
-			elev_bonus = elev_advantage * 5  # +5 per level above, -5 per level below
-
-	var effective_morale: int = maxi(0, base_morale - penalty + elev_bonus)
-	if unit.get("in_hq_los", false):
-		effective_morale += hq_los_morale_buff
-	unit["current_morale"] = effective_morale
-
-	var status: String = unit.get("unit_status", "")
-	if status == "DESTROYED" or status == "IMMOBILISED":
-		return
-	if effective_morale < MORALE_ROUT_THRESHOLD and status != "ROUTING":
-		unit["unit_status"] = "ROUTING"
-		_start_rout(unit)
-		combat.log_event("%s is ROUTING!" % uname)
-	elif effective_morale < MORALE_BREAK_THRESHOLD and status != "ROUTING" and status != "BROKEN":
-		unit["unit_status"] = "BROKEN"
-		_start_break(unit)
-		combat.log_event("%s has BROKEN!" % uname)
-	elif status == "ROUTING" or status == "BROKEN":
-		# Check if routing/broken unit has stopped but enemies are still nearby
-		var uname_check: String = unit.get("name", "")
-		var order_check: Order = order_manager.get_order(uname_check)
-		if order_check == null or order_check.status == Order.Status.COMPLETE:
-			var unit_pos_check := Vector2i(unit["col"], unit["row"])
-			var enemies_near := false
-			for other in units:
-				if other.get("side", "player") == unit.get("side", "player"):
-					continue
-				if other.get("unit_status", "") == "DESTROYED":
-					continue
-				if hex_grid.hex_distance(unit_pos_check, Vector2i(other["col"], other["row"])) <= 4:
-					enemies_near = true
-					break
-			if enemies_near:
-				if status == "ROUTING":
-					_start_rout(unit)
-				else:
-					_start_break(unit)
-		# Rally check - only if morale recovered enough
-		if effective_morale >= MORALE_BREAK_THRESHOLD:
-			unit["unit_status"] = ""
-			combat.log_event("%s has rallied" % uname)
-
-
-func _check_pursuit() -> void:
-	for unit in units:
-		if unit.get("side", "player") != "player":
-			continue
-		# HQ units never pursue
-		var utype: Dictionary = unit_types.get(unit.get("type_code", ""), {})
-		if utype.get("is_hq", false):
-			continue
-		var status: String = unit.get("unit_status", "")
-		if status == "DESTROYED" or status == "BROKEN" or status == "ROUTING":
-			continue
-
-		var uname: String = unit.get("name", "")
-		var order: Order = order_manager.get_order(uname)
-		if order == null:
-			continue
-
-		var pursuit_mode: Order.Pursuit = order.pursuit
-		if pursuit_mode == Order.Pursuit.HOLD:
-			continue
-
-		# Check if unit is already pursuing
-		if unit.get("pursuing", "") != "":
-			# Verify target still visible and still fleeing
-			var target_name: String = unit.get("pursuing", "")
-			var target_unit: Dictionary = {}
-			for other in units:
-				if other.get("name", "") == target_name:
-					target_unit = other
-					break
-			if target_unit.is_empty() or target_unit.get("unit_status", "") == "DESTROYED":
-				unit["pursuing"] = ""
-				continue
-			# Check still in spotting range
-			var unit_pos := Vector2i(unit["col"], unit["row"])
-			var target_pos := Vector2i(target_unit["col"], target_unit["row"])
-			var spot_range: int = _get_effective_spotting_range(unit)
-			if hex_grid.hex_distance(unit_pos, target_pos) > spot_range:
-				unit["pursuing"] = ""
-				continue
-			# Check still in HQ comms range
-			if not unit.get("in_comms", false):
-				unit["pursuing"] = ""
-				continue
-			# Check target still broken/routing
-			var t_status: String = target_unit.get("unit_status", "")
-			if t_status != "BROKEN" and t_status != "ROUTING":
-				unit["pursuing"] = ""
-				continue
-			# Update pursuit waypoint
-			_update_pursuit_target(unit, target_unit, pursuit_mode)
-			continue
-
-		# Look for a broken/routing enemy to pursue
-		var targets := _find_targets_in_range(unit)
-		for target in targets:
-			var t_status: String = target.get("unit_status", "")
-			if t_status == "BROKEN" or t_status == "ROUTING":
-				# Check we'd stay in comms range
-				if not unit.get("in_comms", false):
-					continue
-				unit["pursuing"] = target.get("name", "")
-				_update_pursuit_target(unit, target, pursuit_mode)
-				combat.log_event("%s pursuing %s (%s)" % [
-					uname, target.get("name", "?"),
-					Order.pursuit_to_string(pursuit_mode).to_upper()])
-				break
-
-
-func _update_pursuit_target(unit: Dictionary, target: Dictionary, pursuit_mode: Order.Pursuit) -> void:
-	var uname: String = unit.get("name", "")
-	var unit_pos := Vector2i(unit["col"], unit["row"])
-	var target_pos := Vector2i(target["col"], target["row"])
-	var utype_code: String = unit.get("type_code", "")
-	var utype: Dictionary = unit_types.get(utype_code, {})
-
-	# Check HQ comms range - don't pursue beyond it
-	var assigned_hq_name: String = unit.get("assigned_hq", "")
-	if assigned_hq_name != "":
-		var hq_unit: Dictionary = {}
-		for other in units:
-			if other.get("name", "") == assigned_hq_name:
-				hq_unit = other
-				break
-		if not hq_unit.is_empty():
-			var hq_type: Dictionary = unit_types.get(hq_unit.get("type_code", ""), {})
-			var comms_data = hq_type.get("comms", {})
-			if comms_data is Dictionary:
-				var comms_range: float = float(comms_data.get("range_km", 0)) / 0.5
-				var hq_pos := Vector2i(hq_unit["col"], hq_unit["row"])
-				if float(hex_grid.hex_distance(target_pos, hq_pos)) > comms_range:
-					# Target is outside comms range - don't pursue there
-					unit["pursuing"] = ""
-					return
-
-	match pursuit_mode:
-		Order.Pursuit.SHADOW:
-			# Stay at spotting range - move to keep target at edge of vision
-			var spot_range: int = _get_effective_spotting_range(unit)
-			var dist: int = hex_grid.hex_distance(unit_pos, target_pos)
-			if dist > spot_range - 1:
-				# Need to close distance to keep in sight
-				_issue_immediate_order(unit, Order.Type.MOVE, target_pos,
-					Order.Posture.CAUTIOUS, Order.ROE.RETURN_FIRE)
-		Order.Pursuit.PRESS:
-			# Close in aggressively
-			_issue_immediate_order(unit, Order.Type.MOVE, target_pos,
-				Order.Posture.FAST, Order.ROE.FIRE_AT_WILL)
-
-
-func _abandon_vehicle(unit: Dictionary) -> void:
-	var uname: String = unit.get("name", "?")
-	combat.log_event("%s crew abandoning vehicle!" % uname)
-
-	# Mark the vehicle as destroyed - zero out crew and morale
-	unit["unit_status"] = "DESTROYED"
-	unit["current_crew"] = 0
-	unit["current_morale"] = 0
-	order_manager.cancel_order(uname)
-
-	# Place death marker for the vehicle (stays for 2 hours)
-	var pos := Vector2i(unit["col"], unit["row"])
-	death_markers[pos] = game_clock.game_time_minutes
-
-	# Create a dismounted crew unit in its place
-	var crew_left: int = int(unit.get("current_crew", 1))
-	var side: String = unit.get("side", "player")
-	var assigned_hq: String = unit.get("assigned_hq", "")
-	var infantry_name := uname + " (dismounted)"
-
-	# Carry over rifle ammo from the vehicle
-	var old_ammo: Array = unit.get("current_ammo", [])
-	var old_utype: Dictionary = unit_types.get(unit.get("type_code", ""), {})
-	var old_weapons: Array = old_utype.get("weapons", [])
-	if not (old_weapons is Array):
-		old_weapons = []
-	var carried_rifle_ammo: int = 0
-	for wi in range(old_weapons.size()):
-		var w: Dictionary = old_weapons[wi]
-		if str(w.get("type", "")) == "rifle" and wi < old_ammo.size():
-			carried_rifle_ammo += int(old_ammo[wi])
-
-	var infantry: Dictionary = {
-		"type_code": "INF",
-		"col": pos.x,
-		"row": pos.y,
-		"name": infantry_name,
-		"side": side,
-		"default_roe": "return fire",
-	}
-	_init_unit_ammo_and_morale(infantry)
-
-	# Override with carried ammo and crew count
-	infantry["current_crew"] = crew_left
-	infantry["current_morale"] = 10
-	infantry["morale_damage"] = 35
-	var inf_ammo: Array = infantry.get("current_ammo", [])
-	if inf_ammo.size() > 0:
-		inf_ammo[0] = mini(carried_rifle_ammo, 360)
-	infantry["current_ammo"] = inf_ammo
-
-	if assigned_hq != "":
-		infantry["assigned_hq"] = assigned_hq
-
-	units.append(infantry)
-
-	# Immediately start routing
-	infantry["unit_status"] = "ROUTING"
-	_start_rout(infantry)
-
-	# Trigger destruction morale shock for the vehicle loss
-	_on_unit_destroyed(unit)
-
-	combat.log_event("%s: %d crew dismounted, routing on foot" % [infantry_name, crew_left])
-
-
-func _on_unit_destroyed(dead_unit: Dictionary) -> void:
-	var dead_pos := Vector2i(dead_unit["col"], dead_unit["row"])
-	var dead_side: String = dead_unit.get("side", "player")
-
-	# Add death marker
-	death_markers[dead_pos] = game_clock.game_time_minutes
-
-	# Apply morale shock to friendly units
-	var dead_hq_name: String = dead_unit.get("assigned_hq", "")
-	for unit in units:
-		if unit.get("side", "player") != dead_side:
-			continue
-		if unit.get("unit_status", "") == "DESTROYED":
-			continue
-		var uname: String = unit.get("name", "")
-		var shock: int = 0
-
-		# Direct HQ takes the biggest hit
-		if uname == dead_hq_name:
-			shock = destruction_direct_hq_shock
-		else:
-			# Check if this unit's HQ is the dead unit's HQ (sibling unit)
-			var unit_hq: String = unit.get("assigned_hq", "")
-			if unit_hq == dead_hq_name and dead_hq_name != "":
-				shock = destruction_direct_hq_shock / 2  # sibling lost
-
-			# Parent HQ
-			var dead_unit_hq_unit: Dictionary = {}
-			for other in units:
-				if other.get("name", "") == dead_hq_name:
-					dead_unit_hq_unit = other
-					break
-			if not dead_unit_hq_unit.is_empty():
-				var parent_hq: String = dead_unit_hq_unit.get("assigned_hq", "")
-				if uname == parent_hq:
-					shock = maxi(shock, destruction_parent_hq_shock)
-
-		# Anyone with LOS to the death
-		if shock == 0:
-			var unit_pos := Vector2i(unit["col"], unit["row"])
-			var spot_range: int = _get_effective_spotting_range(unit)
-			if hex_grid.hex_distance(unit_pos, dead_pos) <= spot_range:
-				var unit_elev: int = elevation_grid[unit_pos.y][unit_pos.x]
-				if hex_grid.has_los(unit_pos, unit_elev, dead_pos):
-					shock = destruction_los_witness_shock
-
-		if shock > 0:
-			var cur_dmg: int = int(unit.get("morale_damage", 0))
-			unit["morale_damage"] = cur_dmg + shock
-			combat.log_event("%s morale shocked (-%d) by destruction of %s" % [
-				uname, shock, dead_unit.get("name", "?")])
-
-
-func _recover_morale(unit: Dictionary, minutes: float) -> void:
-	var status: String = unit.get("unit_status", "")
-	if status == "DESTROYED":
-		return
-
-	var uname: String = unit.get("name", "")
-	var supp: float = combat.get_suppression(uname)
-	if supp > 0.0:
-		# Still under fire - no recovery, reset accumulator
-		unit["morale_recovery_accum"] = 0.0
-		return
-
-	var utype_code: String = unit.get("type_code", "")
-	var utype: Dictionary = unit_types.get(utype_code, {})
-	var base_morale: int = int(utype.get("morale", 50))
-	var recovery_rate: float = float(utype.get("morale_recovery_per_min", 1.0))
-	var current: int = int(unit.get("current_morale", base_morale))
-
-	if current >= base_morale:
-		return  # Already at max
-
-	var accum: float = float(unit.get("morale_recovery_accum", 0.0))
-	accum += recovery_rate * minutes
-	if accum >= 1.0:
-		var gain: int = int(accum)
-		current = mini(current + gain, base_morale)
-		unit["current_morale"] = current
-		accum -= float(gain)
-
-		# Recover from broken/routing if morale is high enough
-		if status == "BROKEN" and current >= MORALE_BREAK_THRESHOLD:
-			unit["unit_status"] = ""
-			combat.log_event("%s has rallied" % uname)
-		elif status == "ROUTING" and current >= MORALE_BREAK_THRESHOLD:
-			unit["unit_status"] = ""
-			combat.log_event("%s has rallied from rout" % uname)
-
-	unit["morale_recovery_accum"] = accum
-
-
-func _start_break(unit: Dictionary) -> void:
-	var uname: String = unit.get("name", "")
-	order_manager.cancel_order(uname)
-	# Break: driver bolts cautiously - no staff delay, immediate execution
-	var unit_pos := Vector2i(unit["col"], unit["row"])
-	var flee_hex := _flee_target(unit_pos, 3)
-	_issue_immediate_order(unit, Order.Type.WITHDRAW, flee_hex, Order.Posture.CAUTIOUS, Order.ROE.HOLD_FIRE)
-
-
-func _start_rout(unit: Dictionary) -> void:
-	var uname: String = unit.get("name", "")
-	order_manager.cancel_order(uname)
-	# Rout: driver floors it - no staff delay, immediate execution
-	var unit_pos := Vector2i(unit["col"], unit["row"])
-	var flee_hex := _flee_target(unit_pos, 5)
-	_issue_immediate_order(unit, Order.Type.WITHDRAW, flee_hex, Order.Posture.FAST, Order.ROE.HOLD_FIRE)
-
-
-func _issue_immediate_order(unit: Dictionary, order_type: Order.Type, target: Vector2i,
-		posture: Order.Posture, roe: Order.ROE) -> void:
-	## Creates an order that skips staff/prep delay and starts executing immediately
-	var order := Order.new()
-	order.type = order_type
-	order.add_waypoint(target, posture, roe)
-	order.unit_name = unit.get("name", "")
-	order.issued_at = game_clock.game_time_minutes
-	order.formulation_time = 0.0
-	order.preparation_time = 0.0
-	order.status = Order.Status.EXECUTING
-	order_manager.active_orders[unit.get("name", "")] = order
-
-
-func _flee_target(from: Vector2i, distance: int) -> Vector2i:
-	## Find a hex roughly `distance` hexes toward the nearest map edge
-	var edge: Vector2i = hex_grid.nearest_edge_hex(from)
-	# Walk toward edge but only `distance` steps
-	var current := from
-	for _i in range(distance):
-		var next := _next_step_toward(current, edge)
-		if next == current:
-			break
-		current = next
-	return current
-
-
-
 func _load_display_config() -> void:
 	var cfg := Config.new()
 	cfg.load_file("res://config/map.yaml")
@@ -1493,6 +605,59 @@ func _setup_game_flow() -> void:
 
 	combat = Combat.new()
 
+	combat_resolver = CombatResolver.new(hex_grid, units, unit_types,
+		terrain_grid, elevation_grid, terrain_types,
+		combat, order_manager, game_clock)
+	combat_resolver.night_accuracy_modifier = night_accuracy_modifier
+	combat_resolver.night_range_modifier = night_range_modifier
+	combat_resolver.night_spotting_modifier = night_spotting_modifier
+	combat_resolver.sunrise_hour = sunrise_hour
+	combat_resolver.sunset_hour = sunset_hour
+	combat_resolver.hq_los_accuracy_buff = hq_los_accuracy_buff
+	combat_resolver.hq_los_suppression_resistance = hq_los_suppression_resistance
+	combat_resolver.hq_los_morale_buff = hq_los_morale_buff
+	combat_resolver.destruction_marker_duration = destruction_marker_duration
+	combat_resolver.destruction_direct_hq_shock = destruction_direct_hq_shock
+	combat_resolver.destruction_parent_hq_shock = destruction_parent_hq_shock
+	combat_resolver.destruction_los_witness_shock = destruction_los_witness_shock
+	combat_resolver.MORALE_BREAK_THRESHOLD = MORALE_BREAK_THRESHOLD
+	combat_resolver.MORALE_ROUT_THRESHOLD = MORALE_ROUT_THRESHOLD
+	combat_resolver.ROE_RATE_FIRE_AT_WILL = ROE_RATE_FIRE_AT_WILL
+	combat_resolver.ROE_RATE_RETURN_FIRE = ROE_RATE_RETURN_FIRE
+	combat_resolver.ROE_RATE_HALT_AND_ENGAGE = ROE_RATE_HALT_AND_ENGAGE
+	combat_resolver.posture_configs = posture_configs
+	combat_resolver.fire_effects = fire_effects
+	combat_resolver.death_markers = death_markers
+	combat_resolver.map_cols = map_cols
+	combat_resolver.map_rows = map_rows
+
+	movement = Movement.new(hex_grid, units, unit_types,
+		terrain_grid, terrain_types, posture_configs, order_manager, game_clock)
+	movement.unit_moved.connect(_on_unit_moved)
+
+	hq_comms = HQComms.new(hex_grid, units, unit_types,
+		elevation_grid, combat, order_manager, game_clock)
+	hq_comms.hq_switching_cost = hq_switching_cost
+	hq_comms.hq_comms_order_buff = hq_comms_order_buff
+	hq_comms.hq_los_order_buff = hq_los_order_buff
+	hq_comms.hq_los_morale_buff = hq_los_morale_buff
+	hq_comms.hq_los_accuracy_buff = hq_los_accuracy_buff
+	hq_comms.hq_los_suppression_resistance = hq_los_suppression_resistance
+	hq_comms.hq_auto_switch_minutes = hq_auto_switch_minutes
+	hq_comms.ooda_base_cycle = ooda_base_cycle
+	hq_comms.ooda_min_cycle = ooda_min_cycle
+	hq_comms.ooda_max_cycle = ooda_max_cycle
+	hq_comms.ooda_training_modifiers = ooda_training_modifiers
+	hq_comms.ooda_hq_moving_penalty = ooda_hq_moving_penalty
+	hq_comms.ooda_hq_suppressed_penalty = ooda_hq_suppressed_penalty
+	hq_comms.ooda_hq_destroyed_penalty = ooda_hq_destroyed_penalty
+	hq_comms.ooda_hq_crew_loss_per = ooda_hq_crew_loss_per
+	hq_comms.ooda_direct_to_top_penalty = ooda_direct_to_top_penalty
+	hq_comms.sunrise_hour = sunrise_hour
+	hq_comms.sunset_hour = sunset_hour
+	hq_comms.night_ooda_penalty = night_ooda_penalty
+	hq_comms.get_effective_spotting_range = combat_resolver.get_effective_spotting_range
+
 	game_clock.time_advanced.connect(_on_time_advanced)
 	game_clock.phase_changed.connect(_on_phase_changed)
 
@@ -1531,95 +696,26 @@ func _on_phase_changed(phase: String) -> void:
 		_check_auto_continue()
 
 
+func _on_unit_moved(unit_name: String) -> void:
+	if not selected_unit.is_empty() and selected_unit.get("name", "") == unit_name:
+		# Find the unit dict (it may have moved)
+		for unit in units:
+			if unit.get("name", "") == unit_name:
+				selected_unit = unit
+				_calculate_los(unit)
+				break
+
+
 func _begin_execution() -> void:
 	if not game_clock.is_orders_phase():
 		return
-	var cycle := _calculate_ooda_cycle()
+	var ooda_result: Array = hq_comms.calculate_ooda_cycle()
+	var cycle: float = ooda_result[0]
+	var breakdown: Array = ooda_result[1]
 	game_clock.set_next_cycle(cycle)
 	game_flow_panel.cycle_label.text = "OODA cycle: %d min" % ceili(cycle)
-	game_clock.end_orders_phase()
-
-
-func _calculate_ooda_cycle() -> float:
-	## Calculate the current OODA cycle length based on top-level HQ status
-	## Also updates the tooltip breakdown on the game flow panel
-	var cycle := ooda_base_cycle
-	var breakdown: Array[String] = ["Base: %.0f min" % ooda_base_cycle]
-
-	# Find the top-level HQ
-	var top_hq: Dictionary = {}
-	for unit in units:
-		if unit.get("side", "player") != "player":
-			continue
-		var utype: Dictionary = unit_types.get(unit.get("type_code", ""), {})
-		if utype.get("is_hq", false) and int(utype.get("hq_level", 0)) == 1:
-			top_hq = unit
-			break
-
-	if top_hq.is_empty() or top_hq.get("unit_status", "") == "DESTROYED":
-		cycle *= ooda_hq_destroyed_penalty
-		breakdown.append("HQ destroyed: x%.1f" % ooda_hq_destroyed_penalty)
-		var result := clampf(cycle, ooda_min_cycle, ooda_max_cycle)
-		game_flow_panel.cycle_label.tooltip_text = "\n".join(breakdown)
-		return result
-
-	# Training modifier from HQ unit type
-	var hq_utype: Dictionary = unit_types.get(top_hq.get("type_code", ""), {})
-	var training: String = str(hq_utype.get("training", "regular"))
-	var train_mod: float = ooda_training_modifiers.get(training, 1.0)
-	cycle *= train_mod
-	if train_mod != 1.0:
-		breakdown.append("HQ training (%s): x%.1f" % [training, train_mod])
-
-	# HQ moving penalty
-	var hq_order: Order = order_manager.get_order(top_hq.get("name", ""))
-	if hq_order != null and hq_order.status == Order.Status.EXECUTING:
-		cycle *= ooda_hq_moving_penalty
-		breakdown.append("HQ moving: x%.1f" % ooda_hq_moving_penalty)
-
-	# HQ suppressed penalty
-	var hq_supp: float = combat.get_suppression(top_hq.get("name", ""))
-	if hq_supp > 10:
-		cycle *= ooda_hq_suppressed_penalty
-		breakdown.append("HQ under fire: x%.1f" % ooda_hq_suppressed_penalty)
-
-	# HQ crew casualties
-	var max_crew: int = int(hq_utype.get("crew", 3))
-	var cur_crew: int = int(top_hq.get("current_crew", max_crew))
-	var crew_lost: int = max_crew - cur_crew
-	if crew_lost > 0:
-		var crew_mult := 1.0 + float(crew_lost) * ooda_hq_crew_loss_per
-		cycle *= crew_mult
-		breakdown.append("HQ casualties (%d lost): x%.1f" % [crew_lost, crew_mult])
-
-	# Check if any combat units are directly under top-level HQ (bypassing company layer)
-	var top_hq_name: String = top_hq.get("name", "")
-	var has_direct_reports := false
-	for u in units:
-		if u.get("side", "player") != "player":
-			continue
-		if u.get("unit_status", "") == "DESTROYED":
-			continue
-		var u_utype: Dictionary = unit_types.get(u.get("type_code", ""), {})
-		if u_utype.get("is_hq", false):
-			continue
-		if u.get("assigned_hq", "") == top_hq_name:
-			has_direct_reports = true
-			break
-	if has_direct_reports:
-		cycle *= ooda_direct_to_top_penalty
-		breakdown.append("Units under direct BHQ command: x%.1f" % ooda_direct_to_top_penalty)
-
-	# Night penalty
-	if _is_night():
-		cycle *= night_ooda_penalty
-		breakdown.append("Night: x%.1f" % night_ooda_penalty)
-
-	var result := clampf(cycle, ooda_min_cycle, ooda_max_cycle)
-	breakdown.append("---")
-	breakdown.append("Total: %.0f min" % result)
 	game_flow_panel.cycle_label.tooltip_text = "\n".join(breakdown)
-	return result
+	game_clock.end_orders_phase()
 
 
 func _check_auto_continue() -> void:
@@ -1732,7 +828,7 @@ func _update_fog_of_war() -> void:
 		if unit.get("side", "player") != "player":
 			continue
 		var unit_pos := Vector2i(unit["col"], unit["row"])
-		var reveal_range: int = _get_effective_spotting_range(unit) + 3
+		var reveal_range: int = combat_resolver.get_effective_spotting_range(unit) + 3
 		for dc in range(-reveal_range, reveal_range + 1):
 			for dr in range(-reveal_range, reveal_range + 1):
 				var c: int = unit_pos.x + dc
@@ -1748,7 +844,7 @@ func _update_fog_of_war() -> void:
 	for unit in units:
 		if unit.get("side", "player") != "player":
 			continue
-		var targets: Array = _find_targets_in_range(unit)
+		var targets: Array = combat_resolver.find_targets_in_range(unit)
 		for target in targets:
 			var tname: String = target.get("name", "")
 			var tpos := Vector2i(target["col"], target["row"])
@@ -1779,23 +875,25 @@ func _update_fog_of_war() -> void:
 
 
 func _on_time_advanced(minutes: float) -> void:
-	_update_hq_comms(minutes)
+	hq_comms.update_hq_comms(minutes)
 	order_manager.update_orders(game_clock.game_time_minutes)
-	_move_units(minutes)
+	movement.move_units(minutes)
 	# Resolve combat for all units and decay suppression
 	for unit in units:
-		_resolve_unit_combat(unit, minutes)
+		combat_resolver.resolve_unit_combat(unit, minutes)
 	combat.decay_suppression(minutes)
 	# Update morale and recover for units not under fire
 	for unit in units:
-		_check_morale(unit)
-		_recover_morale(unit, minutes)
+		combat_resolver.check_morale(unit)
+		combat_resolver.recover_morale(unit, minutes)
 	# Check pursuit triggers
-	_check_pursuit()
+	combat_resolver.check_pursuit()
 	# Update fog of war
 	_update_fog_of_war()
 	# Update OODA cycle display
-	game_flow_panel.cycle_label.text = "OODA cycle: %d min" % ceili(_calculate_ooda_cycle())
+	var ooda_display: Array = hq_comms.calculate_ooda_cycle()
+	game_flow_panel.cycle_label.text = "OODA cycle: %d min" % ceili(float(ooda_display[0]))
+	game_flow_panel.cycle_label.tooltip_text = "\n".join(ooda_display[1] as Array)
 	# Write game state log
 	_write_game_log()
 	# Keep selection tracking the selected unit
@@ -1810,8 +908,9 @@ func _write_game_log() -> void:
 	if file == null:
 		return
 	file.store_line("=== GAME STATE at %s ===" % game_clock.get_time_string())
+	var log_ooda: Array = hq_comms.calculate_ooda_cycle()
 	file.store_line("Phase: %s  |  OODA cycle: %.0f min" % [
-		game_clock.get_phase_string(), _calculate_ooda_cycle()])
+		game_clock.get_phase_string(), float(log_ooda[0])])
 	file.store_line("Night: %s" % str(_is_night()))
 	file.store_line("")
 
@@ -1869,204 +968,6 @@ func _write_game_log() -> void:
 		file.store_line(combat.combat_log[i])
 
 	file.close()
-
-
-func _move_units(minutes: float) -> void:
-	for unit in units:
-		var uname: String = unit["name"]
-		var order: Order = order_manager.get_order(uname)
-		if order == null or order.status != Order.Status.EXECUTING:
-			continue
-
-		# Immobilised units cannot move but can still fire
-		if float(unit.get("mobility_damage", 0.0)) >= 1.0:
-			continue
-
-		var utype_code: String = unit["type_code"]
-		var utype: Dictionary = unit_types.get(utype_code, {})
-		var speed_kmh: float = float(utype.get("speed_kmh", 40))
-
-		# Apply posture speed modifier
-		var posture_str := Order.posture_to_string(order.posture)
-		var posture_cfg: Dictionary = posture_configs.get(posture_str, {})
-		var posture_speed_mod: float = posture_cfg.get("speed_modifier", 1.0)
-
-		# Get terrain speed modifier for current hex
-		var cur_terrain: String = terrain_grid[unit["row"]][unit["col"]]
-		var terrain_speed_mod: float = 1.0
-		if cur_terrain in terrain_types:
-			terrain_speed_mod = float(terrain_types[cur_terrain].get("speed_modifier", 1.0))
-
-		if terrain_speed_mod <= 0.0:
-			continue  # impassable
-
-		# Effective speed in km/h (degraded by mobility damage)
-		var effective_speed := speed_kmh * posture_speed_mod * terrain_speed_mod
-		var mob_dmg: float = float(unit.get("mobility_damage", 0.0))
-		effective_speed *= clampf(1.0 - mob_dmg, 0.0, 1.0)
-		# Distance covered this tick in km
-		var distance_km := effective_speed * (minutes / 60.0)
-		# Each hex is 0.5 km
-		var hexes_moved := distance_km / 0.5
-
-		# Accumulate fractional movement
-		if not "move_accumulator" in unit:
-			unit["move_accumulator"] = 0.0
-		unit["move_accumulator"] = float(unit["move_accumulator"]) + hexes_moved
-
-		# Step toward current waypoint one hex at a time
-		while float(unit["move_accumulator"]) >= 1.0:
-			var current := Vector2i(unit["col"], unit["row"])
-			var target := order.current_target()
-
-			if target == Vector2i(-1, -1):
-				order.status = Order.Status.COMPLETE
-				unit["move_accumulator"] = 0.0
-				break
-
-			if current == target:
-				# Reached current waypoint - advance to next
-				if not order.advance_waypoint():
-					order.status = Order.Status.COMPLETE
-					unit["move_accumulator"] = 0.0
-					break
-				# Update posture for new waypoint
-				posture_str = Order.posture_to_string(order.posture)
-				posture_cfg = posture_configs.get(posture_str, {})
-				posture_speed_mod = posture_cfg.get("speed_modifier", 1.0)
-				continue
-
-			# Find next hex toward current waypoint
-			var unit_training: String = str(utype.get("training", "regular"))
-			var unit_morale: int = int(utype.get("morale", 50))
-			var next_hex := _next_step_toward(current, target, posture_str, unit_training, unit_morale)
-
-			# Hesitation: low morale/poorly trained units in cover may stall
-			# before moving into open ground
-			var cur_terrain_code: String = terrain_grid[current.y][current.x]
-			var next_terrain: String = terrain_grid[next_hex.y][next_hex.x]
-			var in_cover := cur_terrain_code == "W" or cur_terrain_code == "T"
-			var leaving_cover := in_cover and (next_terrain == "O" or next_terrain == "S")
-			if leaving_cover and posture_str == "cautious":
-				if not "hesitate_until" in unit:
-					# Roll for hesitation based on training/morale
-					var hesitate_chance := 0.0
-					match unit_training:
-						"militia": hesitate_chance = 0.6
-						"irregular": hesitate_chance = 0.4
-						"regular": hesitate_chance = 0.1
-					hesitate_chance *= clampf((60.0 - unit_morale) / 50.0, 0.0, 1.0)
-					if randf() < hesitate_chance:
-						# Stall for 15-60 minutes
-						var stall_minutes := randf_range(15.0, 60.0)
-						unit["hesitate_until"] = game_clock.game_time_minutes + stall_minutes
-						unit["move_accumulator"] = 0.0
-						break
-				else:
-					if game_clock.game_time_minutes < float(unit["hesitate_until"]):
-						unit["move_accumulator"] = 0.0
-						break
-					else:
-						unit.erase("hesitate_until")
-			var next_speed_mod: float = 1.0
-			if next_terrain in terrain_types:
-				next_speed_mod = float(terrain_types[next_terrain].get("speed_modifier", 1.0))
-
-			if next_speed_mod <= 0.0:
-				order.status = Order.Status.COMPLETE
-				unit["move_accumulator"] = 0.0
-				break
-
-			# Check hex occupancy
-			var hex_occupied := false
-			var occupied_by_enemy := false
-			for other in units:
-				if other == unit:
-					continue
-				if other.get("unit_status", "") == "DESTROYED":
-					continue
-				if int(other["col"]) == next_hex.x and int(other["row"]) == next_hex.y:
-					hex_occupied = true
-					if other.get("side", "player") != unit.get("side", "player"):
-						occupied_by_enemy = true
-					break
-			# Never enter enemy-occupied hex
-			if occupied_by_enemy:
-				unit["move_accumulator"] = 0.0
-				break
-			# Can pass through friendly hexes but can't stop there
-			if hex_occupied and next_hex == target:
-				# Destination is occupied - stop one hex short
-				unit["move_accumulator"] = 0.0
-				break
-
-			unit["col"] = next_hex.x
-			unit["row"] = next_hex.y
-			unit["move_accumulator"] = float(unit["move_accumulator"]) - 1.0
-
-			# Update LOS if this is the selected unit
-			if not selected_unit.is_empty() and selected_unit.get("name", "") == uname:
-				selected_unit = unit
-				_calculate_los(unit)
-
-
-func _next_step_toward(from: Vector2i, to: Vector2i, posture_name: String = "normal",
-		_training: String = "regular", _morale: int = 50) -> Vector2i:
-	var neighbors: Array[Vector2i] = hex_grid.get_hex_neighbors(from)
-	var best := from
-	var best_score := 999999.0
-	var pcfg: Dictionary = posture_configs.get(posture_name, {})
-	var road_pref: float = pcfg.get("road_preference", 1.0)
-	var cover_pref: float = pcfg.get("cover_preference", 0.5)
-
-	var cur_dist := float(hex_grid.hex_distance(from, to))
-	var found_progress := false
-
-	# First pass: try neighbors that make progress or go sideways
-	for n in neighbors:
-		if n.x < 0 or n.x >= map_cols or n.y < 0 or n.y >= map_rows:
-			continue
-		var dist := float(hex_grid.hex_distance(n, to))
-		if dist > cur_dist:
-			continue
-
-		var n_terrain: String = terrain_grid[n.y][n.x]
-		var t_info: Dictionary = terrain_types.get(n_terrain, {})
-		var speed_mod: float = float(t_info.get("speed_modifier", 1.0))
-		if speed_mod <= 0.0:
-			continue
-
-		found_progress = true
-		var cost := dist * 10.0
-		if n_terrain == "S":
-			cost -= road_pref * 0.4
-		if n_terrain == "W" or n_terrain == "T":
-			cost -= cover_pref * 0.4
-		if n_terrain == "O":
-			cost += cover_pref * 0.2
-
-		if cost < best_score:
-			best_score = cost
-			best = n
-
-	# Second pass: if stuck, allow one step backward to get unstuck
-	if not found_progress:
-		for n in neighbors:
-			if n.x < 0 or n.x >= map_cols or n.y < 0 or n.y >= map_rows:
-				continue
-			var n_terrain: String = terrain_grid[n.y][n.x]
-			var t_info: Dictionary = terrain_types.get(n_terrain, {})
-			var speed_mod: float = float(t_info.get("speed_modifier", 1.0))
-			if speed_mod <= 0.0:
-				continue
-			var dist := float(hex_grid.hex_distance(n, to))
-			var cost := dist * 10.0
-			if cost < best_score:
-				best_score = cost
-				best = n
-
-	return best
-
 
 
 func _make_panel_label() -> Label:
@@ -2206,7 +1107,7 @@ func _draw() -> void:
 				else:
 					# Check if within spotting range but not visible
 					var unit_coord := Vector2i(selected_unit["col"], selected_unit["row"])
-					if hex_grid.hex_distance(unit_coord, coord) <= _get_effective_spotting_range(selected_unit):
+					if hex_grid.hex_distance(unit_coord, coord) <= combat_resolver.get_effective_spotting_range(selected_unit):
 						# In range but blocked: dim red
 						_draw_hex_filled(center, scaled_size * 0.92, Color(0.9, 0.2, 0.1, 0.15))
 
@@ -2659,7 +1560,7 @@ func _calculate_los(unit: Dictionary) -> void:
 	los_visible.clear()
 	var uc: int = unit["col"]
 	var ur: int = unit["row"]
-	var spot_range: int = _get_effective_spotting_range(unit)
+	var spot_range: int = combat_resolver.get_effective_spotting_range(unit)
 	var origin := Vector2i(uc, ur)
 	var origin_elev: int = elevation_grid[ur][uc]
 
@@ -2833,7 +1734,7 @@ func _handle_move_order(screen_pos: Vector2) -> void:
 	if float(selected_unit.get("hq_switch_remaining", 0.0)) > 0:
 		return  # Switching HQ, can't receive orders
 
-	var hq_mod: float = _get_hq_order_modifier(selected_unit)
+	var hq_mod: float = hq_comms.get_hq_order_modifier(selected_unit)
 	# HQ units always default to hold fire, normal posture, no pursuit
 	var wp_posture := current_posture
 	var wp_roe := current_roe

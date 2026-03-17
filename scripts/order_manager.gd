@@ -144,6 +144,20 @@ func get_order(unit_name: String) -> Order:
 	return null
 
 
+func issue_immediate_order(unit: Dictionary, order_type: Order.Type, target: Vector2i,
+		posture: Order.Posture, roe: Order.ROE, game_time: float) -> void:
+	## Creates an order that skips staff/prep delay and starts executing immediately.
+	var order := Order.new()
+	order.type = order_type
+	order.add_waypoint(target, posture, roe)
+	order.unit_name = unit.get("name", "")
+	order.issued_at = game_time
+	order.formulation_time = 0.0
+	order.preparation_time = 0.0
+	order.status = Order.Status.EXECUTING
+	active_orders[unit.get("name", "")] = order
+
+
 func _log(msg: String) -> void:
 	order_log.append(msg)
 	if order_log.size() > 50:
