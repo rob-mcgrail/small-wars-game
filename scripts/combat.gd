@@ -113,9 +113,12 @@ func resolve_combat(shooter: Dictionary, target: Dictionary,
 	if not shooter_moving and (weapon_type == "rifle" or weapon_type == "rpg"):
 		platform_accuracy = 1.0
 
-	# Close range bonus: within 1 hex (500m), accuracy and damage are much higher
+	# Close range bonus: within 1 hex (500m), a vehicle is a huge target
+	# Within 2 hexes (1km), still significantly easier
 	var close_range_bonus: float = 1.0
 	if distance_hexes <= 1:
+		close_range_bonus = 2.5  # 500m at a truck - hard to miss
+	elif distance_hexes <= 2:
 		close_range_bonus = 1.5
 
 	# Final hit probability per round
@@ -161,11 +164,12 @@ func _apply_hit_zone(result: Dictionary, vs_soft: int, distance: int = 3) -> voi
 	var zone_roll: float = randf()
 	if close:
 		# Close range: 35% body, 20% mobility, 10% weapon, 25% crew, 10% catastrophic
+		# Rifle rounds punch through sheet metal easily at 500m
 		if zone_roll < 0.35:
-			result["vehicle_damage"] += randf_range(0.08, 0.20) * dmg_mult
+			result["vehicle_damage"] += randf_range(0.10, 0.25) * dmg_mult
 		elif zone_roll < 0.55:
-			result["mobility_damage"] += randf_range(0.15, 0.35)
-			result["vehicle_damage"] += randf_range(0.03, 0.10)
+			result["mobility_damage"] += randf_range(0.20, 0.45)
+			result["vehicle_damage"] += randf_range(0.05, 0.12)
 		elif zone_roll < 0.65:
 			result["weapon_disabled"] = true
 			result["vehicle_damage"] += randf_range(0.03, 0.10)

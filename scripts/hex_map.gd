@@ -78,6 +78,7 @@ var game_clock: GameClock
 var game_flow_panel: GameFlowPanel
 var order_manager: OrderManager
 var combat: Combat
+var hex_grid: HexGrid
 
 # Display toggles
 var show_los := true
@@ -143,6 +144,7 @@ func _ready() -> void:
 	_load_display_config()
 	_load_hq_config()
 	_load_map()
+	hex_grid = HexGrid.new(terrain_grid, elevation_grid, map_cols, map_rows, hex_size)
 	_place_starting_units()
 	_setup_hex_panel()
 	_setup_unit_panel()
@@ -246,7 +248,7 @@ func _place_starting_units() -> void:
 	# Place player technical near the center
 	var center_col := map_cols / 2
 	var center_row := map_rows / 2
-	var player_pos := _find_open_hex_near(center_col, center_row)
+	var player_pos: Vector2i = hex_grid.find_open_hex_near(center_col, center_row)
 	if player_pos != Vector2i(-1, -1):
 		var unit_dict: Dictionary = {
 			"type_code": "TEC",
@@ -259,7 +261,7 @@ func _place_starting_units() -> void:
 		units.append(unit_dict)
 
 	# Place player Technical 2 nearby
-	var player2_pos := _find_open_hex_near(center_col, center_row + 2)
+	var player2_pos: Vector2i = hex_grid.find_open_hex_near(center_col, center_row + 2)
 	if player2_pos != Vector2i(-1, -1):
 		var unit2_dict: Dictionary = {
 			"type_code": "TEC",
@@ -272,7 +274,7 @@ func _place_starting_units() -> void:
 		units.append(unit2_dict)
 
 	# Place enemy technicals ~8km (16 hexes) away
-	var enemy_pos := _find_open_hex_near(center_col + 16, center_row)
+	var enemy_pos: Vector2i = hex_grid.find_open_hex_near(center_col + 16, center_row)
 	if enemy_pos != Vector2i(-1, -1):
 		var enemy_dict: Dictionary = {
 			"type_code": "TEC",
@@ -285,7 +287,7 @@ func _place_starting_units() -> void:
 		_init_unit_ammo_and_morale(enemy_dict)
 		units.append(enemy_dict)
 
-	var enemy2_pos := _find_open_hex_near(center_col + 16, center_row + 2)
+	var enemy2_pos: Vector2i = hex_grid.find_open_hex_near(center_col + 16, center_row + 2)
 	if enemy2_pos != Vector2i(-1, -1):
 		var enemy2_dict: Dictionary = {
 			"type_code": "TEC",
@@ -299,7 +301,7 @@ func _place_starting_units() -> void:
 		units.append(enemy2_dict)
 
 	# Place Battalion HQ 6 hexes behind center
-	var bhq_pos := _find_open_hex_near(center_col - 6, center_row)
+	var bhq_pos: Vector2i = hex_grid.find_open_hex_near(center_col - 6, center_row)
 	if bhq_pos != Vector2i(-1, -1):
 		var bhq_dict: Dictionary = {
 			"type_code": "BHQ",
@@ -312,7 +314,7 @@ func _place_starting_units() -> void:
 		units.append(bhq_dict)
 
 	# Place Company HQ 3 hexes behind center
-	var shq_pos := _find_open_hex_near(center_col - 3, center_row)
+	var shq_pos: Vector2i = hex_grid.find_open_hex_near(center_col - 3, center_row)
 	if shq_pos != Vector2i(-1, -1):
 		var shq_dict: Dictionary = {
 			"type_code": "SHQ",
@@ -330,18 +332,6 @@ func _place_starting_units() -> void:
 		if u.get("name", "") == "Technical 1" or u.get("name", "") == "Technical 2":
 			u["assigned_hq"] = "Company HQ"
 
-
-func _find_open_hex_near(col: int, row: int) -> Vector2i:
-	for radius in range(0, 10):
-		for dc in range(-radius, radius + 1):
-			for dr in range(-radius, radius + 1):
-				var c := col + dc
-				var r := row + dr
-				if c >= 0 and c < map_cols and r >= 0 and r < map_rows:
-					var code: String = terrain_grid[r][c]
-					if code == "O" or code == "S":
-						return Vector2i(c, r)
-	return Vector2i(-1, -1)
 
 
 func _init_unit_ammo_and_morale(unit: Dictionary) -> void:
@@ -421,7 +411,7 @@ func _update_hq_comms(minutes: float) -> void:
 		# Calculate hex distance
 		var unit_pos := Vector2i(unit["col"], unit["row"])
 		var hq_pos := Vector2i(hq_unit["col"], hq_unit["row"])
-		var distance: int = _hex_distance(unit_pos, hq_pos)
+		var distance: int = hex_grid.hex_distance(unit_pos, hq_pos)
 		unit["in_comms"] = float(distance) <= comms_range_hexes
 
 		# If out of comms, try to find another friendly HQ in range
@@ -446,7 +436,7 @@ func _update_hq_comms(minutes: float) -> void:
 					continue
 				var other_range: float = float(other_comms.get("range_km", 0)) / 0.5
 				var other_pos := Vector2i(other["col"], other["row"])
-				var other_dist: int = _hex_distance(unit_pos, other_pos)
+				var other_dist: int = hex_grid.hex_distance(unit_pos, other_pos)
 				if float(other_dist) <= other_range and other_dist < best_hq_dist:
 					best_hq_dist = other_dist
 					best_hq_name = other.get("name", "")
@@ -462,7 +452,7 @@ func _update_hq_comms(minutes: float) -> void:
 		# LOS check is independent of comms - within spotting range and can see HQ
 		var unit_spot: int = _get_effective_spotting_range(unit)
 		var unit_elev: int = elevation_grid[unit_pos.y][unit_pos.x]
-		unit["in_hq_los"] = distance <= unit_spot and _has_los(unit_pos, unit_elev, hq_pos)
+		unit["in_hq_los"] = distance <= unit_spot and hex_grid.has_los(unit_pos, unit_elev, hq_pos)
 
 
 func _get_hq_order_modifier(unit: Dictionary) -> float:
@@ -573,7 +563,7 @@ func _resolve_unit_combat(unit: Dictionary, minutes: float) -> void:
 			if target.get("unit_status", "") == "DESTROYED":
 				continue
 			var t_pos := Vector2i(target["col"], target["row"])
-			var dist := _hex_distance(unit_pos, t_pos)
+			var dist: int = hex_grid.hex_distance(unit_pos, t_pos)
 			if float(dist) <= w_max_range_hexes and dist < best_dist:
 				best_dist = dist
 				best_target = target
@@ -686,10 +676,18 @@ func _resolve_unit_combat(unit: Dictionary, minutes: float) -> void:
 				order_manager.cancel_order(best_target.get("name", ""))
 				combat.log_event("%s DESTROYED by %s" % [best_target.get("name", "?"), uname])
 				_on_unit_destroyed(best_target)
-		elif (t_dmg >= 0.7 or t_mob_dmg >= 0.8) and t_crew_left > 0:
-			# Vehicle is wrecked - crew abandons
+		elif t_crew_left > 0:
+			# Vehicle abandonment - thresholds are lower when broken/routing
 			var t_status: String = best_target.get("unit_status", "")
-			if t_status != "DESTROYED":
+			var abandon_vdmg: float = 0.7
+			var abandon_mob: float = 0.8
+			if t_status == "ROUTING":
+				abandon_vdmg = 0.35
+				abandon_mob = 0.4
+			elif t_status == "BROKEN":
+				abandon_vdmg = 0.5
+				abandon_mob = 0.6
+			if (t_dmg >= abandon_vdmg or t_mob_dmg >= abandon_mob) and t_status != "DESTROYED":
 				_abandon_vehicle(best_target)
 
 		if rounds > 0:
@@ -724,7 +722,7 @@ func _get_effective_spotting_range(unit: Dictionary) -> int:
 			var c := unit_pos.x + dc
 			var r := unit_pos.y + dr
 			if c >= 0 and c < map_cols and r >= 0 and r < map_rows:
-				var d := _hex_distance(unit_pos, Vector2i(c, r))
+				var d: int = hex_grid.hex_distance(unit_pos, Vector2i(c, r))
 				if d >= base_range - 1 and d <= base_range:
 					var e: int = elevation_grid[r][c]
 					if e < min_elev_at_edge:
@@ -750,9 +748,9 @@ func _find_targets_in_range(unit: Dictionary) -> Array:
 		if other.get("side", "player") == unit_side:
 			continue
 		var other_pos := Vector2i(other["col"], other["row"])
-		if _hex_distance(unit_pos, other_pos) > spot_range:
+		if hex_grid.hex_distance(unit_pos, other_pos) > spot_range:
 			continue
-		if _has_los(unit_pos, unit_elev, other_pos):
+		if hex_grid.has_los(unit_pos, unit_elev, other_pos):
 			targets.append(other)
 	return targets
 
@@ -859,7 +857,7 @@ func _check_morale(unit: Dictionary) -> void:
 			if other.get("unit_status", "") == "DESTROYED":
 				continue
 			var other_pos := Vector2i(other["col"], other["row"])
-			if _hex_distance(unit_pos_check, other_pos) <= 3:
+			if hex_grid.hex_distance(unit_pos_check, other_pos) <= 3:
 				enemy_close = true
 				break
 		if enemy_close:
@@ -882,7 +880,7 @@ func _check_morale(unit: Dictionary) -> void:
 			if other.get("unit_status", "") == "DESTROYED":
 				continue
 			var other_pos := Vector2i(other["col"], other["row"])
-			if _hex_distance(unit_pos, other_pos) <= spot_range:
+			if hex_grid.hex_distance(unit_pos, other_pos) <= spot_range:
 				var other_elev: int = elevation_grid[other_pos.y][other_pos.x]
 				if other_elev > highest_enemy_elev:
 					highest_enemy_elev = other_elev
@@ -907,10 +905,30 @@ func _check_morale(unit: Dictionary) -> void:
 		unit["unit_status"] = "BROKEN"
 		_start_break(unit)
 		combat.log_event("%s has BROKEN!" % uname)
-	elif effective_morale >= MORALE_BREAK_THRESHOLD and (status == "BROKEN" or status == "ROUTING"):
-		# Rally - morale has recovered enough
-		unit["unit_status"] = ""
-		combat.log_event("%s has rallied" % uname)
+	elif status == "ROUTING" or status == "BROKEN":
+		# Check if routing/broken unit has stopped but enemies are still nearby
+		var uname_check: String = unit.get("name", "")
+		var order_check: Order = order_manager.get_order(uname_check)
+		if order_check == null or order_check.status == Order.Status.COMPLETE:
+			var unit_pos_check := Vector2i(unit["col"], unit["row"])
+			var enemies_near := false
+			for other in units:
+				if other.get("side", "player") == unit.get("side", "player"):
+					continue
+				if other.get("unit_status", "") == "DESTROYED":
+					continue
+				if hex_grid.hex_distance(unit_pos_check, Vector2i(other["col"], other["row"])) <= 4:
+					enemies_near = true
+					break
+			if enemies_near:
+				if status == "ROUTING":
+					_start_rout(unit)
+				else:
+					_start_break(unit)
+		# Rally check - only if morale recovered enough
+		if effective_morale >= MORALE_BREAK_THRESHOLD:
+			unit["unit_status"] = ""
+			combat.log_event("%s has rallied" % uname)
 
 
 func _check_pursuit() -> void:
@@ -950,7 +968,7 @@ func _check_pursuit() -> void:
 			var unit_pos := Vector2i(unit["col"], unit["row"])
 			var target_pos := Vector2i(target_unit["col"], target_unit["row"])
 			var spot_range: int = _get_effective_spotting_range(unit)
-			if _hex_distance(unit_pos, target_pos) > spot_range:
+			if hex_grid.hex_distance(unit_pos, target_pos) > spot_range:
 				unit["pursuing"] = ""
 				continue
 			# Check still in HQ comms range
@@ -1003,7 +1021,7 @@ func _update_pursuit_target(unit: Dictionary, target: Dictionary, pursuit_mode: 
 			if comms_data is Dictionary:
 				var comms_range: float = float(comms_data.get("range_km", 0)) / 0.5
 				var hq_pos := Vector2i(hq_unit["col"], hq_unit["row"])
-				if float(_hex_distance(target_pos, hq_pos)) > comms_range:
+				if float(hex_grid.hex_distance(target_pos, hq_pos)) > comms_range:
 					# Target is outside comms range - don't pursue there
 					unit["pursuing"] = ""
 					return
@@ -1012,7 +1030,7 @@ func _update_pursuit_target(unit: Dictionary, target: Dictionary, pursuit_mode: 
 		Order.Pursuit.SHADOW:
 			# Stay at spotting range - move to keep target at edge of vision
 			var spot_range: int = _get_effective_spotting_range(unit)
-			var dist: int = _hex_distance(unit_pos, target_pos)
+			var dist: int = hex_grid.hex_distance(unit_pos, target_pos)
 			if dist > spot_range - 1:
 				# Need to close distance to keep in sight
 				_issue_immediate_order(unit, Order.Type.MOVE, target_pos,
@@ -1128,9 +1146,9 @@ func _on_unit_destroyed(dead_unit: Dictionary) -> void:
 		if shock == 0:
 			var unit_pos := Vector2i(unit["col"], unit["row"])
 			var spot_range: int = _get_effective_spotting_range(unit)
-			if _hex_distance(unit_pos, dead_pos) <= spot_range:
+			if hex_grid.hex_distance(unit_pos, dead_pos) <= spot_range:
 				var unit_elev: int = elevation_grid[unit_pos.y][unit_pos.x]
-				if _has_los(unit_pos, unit_elev, dead_pos):
+				if hex_grid.has_los(unit_pos, unit_elev, dead_pos):
 					shock = destruction_los_witness_shock
 
 		if shock > 0:
@@ -1214,7 +1232,7 @@ func _issue_immediate_order(unit: Dictionary, order_type: Order.Type, target: Ve
 
 func _flee_target(from: Vector2i, distance: int) -> Vector2i:
 	## Find a hex roughly `distance` hexes toward the nearest map edge
-	var edge := _nearest_edge_hex(from)
+	var edge: Vector2i = hex_grid.nearest_edge_hex(from)
 	# Walk toward edge but only `distance` steps
 	var current := from
 	for _i in range(distance):
@@ -1224,24 +1242,6 @@ func _flee_target(from: Vector2i, distance: int) -> Vector2i:
 		current = next
 	return current
 
-
-func _nearest_edge_hex(pos: Vector2i) -> Vector2i:
-	# Find closest map edge hex
-	var dist_left: int = pos.x
-	var dist_right: int = map_cols - 1 - pos.x
-	var dist_top: int = pos.y
-	var dist_bottom: int = map_rows - 1 - pos.y
-	var min_dist: int = dist_left
-	var best: Vector2i = Vector2i(0, pos.y)
-	if dist_right < min_dist:
-		min_dist = dist_right
-		best = Vector2i(map_cols - 1, pos.y)
-	if dist_top < min_dist:
-		min_dist = dist_top
-		best = Vector2i(pos.x, 0)
-	if dist_bottom < min_dist:
-		best = Vector2i(pos.x, map_rows - 1)
-	return best
 
 
 func _load_display_config() -> void:
@@ -1509,8 +1509,12 @@ func _on_execute_pressed() -> void:
 		_begin_execution()
 
 
+var _interrupted := false
+
+
 func _on_interrupt_pressed() -> void:
 	# Force back to orders phase mid-execution
+	_interrupted = true
 	game_clock.current_phase = GameClock.Phase.ORDERS
 	game_clock.phase_changed.emit("ORDERS")
 	game_flow_panel.reset_ooda_count()
@@ -1519,6 +1523,9 @@ func _on_interrupt_pressed() -> void:
 func _on_phase_changed(phase: String) -> void:
 	unit_panel.set_orders_phase(phase == "ORDERS")
 	if phase == "ORDERS":
+		if _interrupted:
+			_interrupted = false
+			return
 		_check_auto_continue()
 
 
@@ -1677,7 +1684,7 @@ func _select_and_center_unit(unit: Dictionary) -> void:
 	_calculate_los(unit)
 	# Center camera on unit
 	var viewport_size := get_viewport_rect().size
-	var pixel_pos := _hex_to_pixel(pos.x, pos.y)
+	var pixel_pos: Vector2 = hex_grid.hex_to_pixel(pos.x, pos.y)
 	camera_offset = pixel_pos * zoom_level - viewport_size * 0.5
 	_clamp_camera()
 	_update_info_label()
@@ -1731,7 +1738,7 @@ func _update_fog_of_war() -> void:
 				if c < 0 or c >= map_cols or r < 0 or r >= map_rows:
 					continue
 				var hex_coord := Vector2i(c, r)
-				if _hex_distance(unit_pos, hex_coord) <= reveal_range:
+				if hex_grid.hex_distance(unit_pos, hex_coord) <= reveal_range:
 					revealed_hexes[hex_coord] = true
 
 	# 2. Find currently spotted enemy units
@@ -2003,21 +2010,21 @@ func _move_units(minutes: float) -> void:
 
 func _next_step_toward(from: Vector2i, to: Vector2i, posture_name: String = "normal",
 		_training: String = "regular", _morale: int = 50) -> Vector2i:
-	var neighbors := _get_hex_neighbors(from)
+	var neighbors: Array[Vector2i] = hex_grid.get_hex_neighbors(from)
 	var best := from
 	var best_score := 999999.0
 	var pcfg: Dictionary = posture_configs.get(posture_name, {})
 	var road_pref: float = pcfg.get("road_preference", 1.0)
 	var cover_pref: float = pcfg.get("cover_preference", 0.5)
 
-	var cur_dist := float(_hex_distance(from, to))
+	var cur_dist := float(hex_grid.hex_distance(from, to))
 	var found_progress := false
 
 	# First pass: try neighbors that make progress or go sideways
 	for n in neighbors:
 		if n.x < 0 or n.x >= map_cols or n.y < 0 or n.y >= map_rows:
 			continue
-		var dist := float(_hex_distance(n, to))
+		var dist := float(hex_grid.hex_distance(n, to))
 		if dist > cur_dist:
 			continue
 
@@ -2050,7 +2057,7 @@ func _next_step_toward(from: Vector2i, to: Vector2i, posture_name: String = "nor
 			var speed_mod: float = float(t_info.get("speed_modifier", 1.0))
 			if speed_mod <= 0.0:
 				continue
-			var dist := float(_hex_distance(n, to))
+			var dist := float(hex_grid.hex_distance(n, to))
 			var cost := dist * 10.0
 			if cost < best_score:
 				best_score = cost
@@ -2058,29 +2065,6 @@ func _next_step_toward(from: Vector2i, to: Vector2i, posture_name: String = "nor
 
 	return best
 
-
-func _get_hex_neighbors(hex: Vector2i) -> Array[Vector2i]:
-	var col := hex.x
-	var row := hex.y
-	var parity := col & 1
-	var neighbors: Array[Vector2i] = []
-
-	if parity == 0:
-		neighbors.append(Vector2i(col + 1, row - 1))
-		neighbors.append(Vector2i(col + 1, row))
-		neighbors.append(Vector2i(col, row + 1))
-		neighbors.append(Vector2i(col - 1, row))
-		neighbors.append(Vector2i(col - 1, row - 1))
-		neighbors.append(Vector2i(col, row - 1))
-	else:
-		neighbors.append(Vector2i(col + 1, row))
-		neighbors.append(Vector2i(col + 1, row + 1))
-		neighbors.append(Vector2i(col, row + 1))
-		neighbors.append(Vector2i(col - 1, row + 1))
-		neighbors.append(Vector2i(col - 1, row))
-		neighbors.append(Vector2i(col, row - 1))
-
-	return neighbors
 
 
 func _make_panel_label() -> Label:
@@ -2151,7 +2135,7 @@ func _draw() -> void:
 
 	for col in range(min_col, max_col + 1):
 		for row in range(min_row, max_row + 1):
-			var center := (_hex_to_pixel(col, row) - camera_offset / zoom_level) * zoom_level
+			var center : Vector2 = (hex_grid.hex_to_pixel(col, row) - camera_offset / zoom_level) * zoom_level
 			var code: String = terrain_grid[row][col]
 			var elev: int = elevation_grid[row][col] if row < elevation_grid.size() and col < elevation_grid[row].size() else 5
 
@@ -2213,14 +2197,14 @@ func _draw() -> void:
 		for col in range(min_col, max_col + 1):
 			for row in range(min_row, max_row + 1):
 				var coord := Vector2i(col, row)
-				var center := (_hex_to_pixel(col, row) - camera_offset / zoom_level) * zoom_level
+				var center : Vector2 = (hex_grid.hex_to_pixel(col, row) - camera_offset / zoom_level) * zoom_level
 				if coord in los_visible:
 					# Visible: light green tint
 					_draw_hex_filled(center, scaled_size * 0.92, Color(0.3, 0.9, 0.3, 0.12))
 				else:
 					# Check if within spotting range but not visible
 					var unit_coord := Vector2i(selected_unit["col"], selected_unit["row"])
-					if _hex_distance(unit_coord, coord) <= _get_effective_spotting_range(selected_unit):
+					if hex_grid.hex_distance(unit_coord, coord) <= _get_effective_spotting_range(selected_unit):
 						# In range but blocked: dim red
 						_draw_hex_filled(center, scaled_size * 0.92, Color(0.9, 0.2, 0.1, 0.15))
 
@@ -2231,7 +2215,7 @@ func _draw() -> void:
 			var utype: Dictionary = unit_types[utype_code]
 			var weapons = utype.get("weapons", [])
 			var unit_pos := Vector2i(selected_unit["col"], selected_unit["row"])
-			var unit_screen := (_hex_to_pixel(unit_pos.x, unit_pos.y) - camera_offset / zoom_level) * zoom_level
+			var unit_screen : Vector2 = (hex_grid.hex_to_pixel(unit_pos.x, unit_pos.y) - camera_offset / zoom_level) * zoom_level
 
 			# Assign colors per weapon
 			var ring_colors := [
@@ -2334,13 +2318,13 @@ func _draw() -> void:
 		var line_w := maxf(2.0, scaled_size * 0.05)
 
 		# Start from unit position
-		var prev_screen := (_hex_to_pixel(unit["col"], unit["row"]) - camera_offset / zoom_level) * zoom_level
+		var prev_screen : Vector2 = (hex_grid.hex_to_pixel(unit["col"], unit["row"]) - camera_offset / zoom_level) * zoom_level
 
 		for wi in range(order.waypoints.size()):
 			var wp: Dictionary = order.waypoints[wi]
 			var wp_hex: Vector2i = wp["hex"]
 			var wp_posture: Order.Posture = wp["posture"]
-			var wp_screen := (_hex_to_pixel(wp_hex.x, wp_hex.y) - camera_offset / zoom_level) * zoom_level
+			var wp_screen : Vector2 = (hex_grid.hex_to_pixel(wp_hex.x, wp_hex.y) - camera_offset / zoom_level) * zoom_level
 
 			# Color by waypoint posture
 			var line_color := Color(0.7, 0.3, 0.9, 0.6)
@@ -2387,7 +2371,7 @@ func _draw() -> void:
 		if age > LAST_SEEN_DURATION:
 			continue
 		var lse_alpha: float = clampf(1.0 - age / LAST_SEEN_DURATION, 0.0, 1.0) * 0.6
-		var screen_pos := (_hex_to_pixel(pos.x, pos.y) - camera_offset / zoom_level) * zoom_level
+		var screen_pos : Vector2 = (hex_grid.hex_to_pixel(pos.x, pos.y) - camera_offset / zoom_level) * zoom_level
 		var circle_r := scaled_size * 0.25
 		var circle_color := Color(0.85, 0.15, 0.1, lse_alpha)
 		var segments := 16
@@ -2404,7 +2388,7 @@ func _draw() -> void:
 		if age > destruction_marker_duration:
 			continue
 		var dm_alpha: float = clampf(1.0 - age / destruction_marker_duration, 0.3, 0.9)
-		var dm_screen := (_hex_to_pixel(pos.x, pos.y) - camera_offset / zoom_level) * zoom_level
+		var dm_screen : Vector2 = (hex_grid.hex_to_pixel(pos.x, pos.y) - camera_offset / zoom_level) * zoom_level
 		var dm_size := scaled_size * 0.3
 		var dm_color := Color(0.7, 0.1, 0.05, dm_alpha)
 		var dm_w := maxf(2.0, scaled_size * 0.06)
@@ -2432,7 +2416,7 @@ func _draw() -> void:
 			var uc: int = unit["col"]
 			var ur: int = unit["row"]
 			if uc >= min_col and uc <= max_col and ur >= min_row and ur <= max_row:
-				var center := (_hex_to_pixel(uc, ur) - camera_offset / zoom_level) * zoom_level
+				var center : Vector2 = (hex_grid.hex_to_pixel(uc, ur) - camera_offset / zoom_level) * zoom_level
 				var type_code: String = unit["type_code"]
 				if type_code in unit_types:
 					_draw_unit_counter(center, scaled_size, unit_types[type_code], unit["name"], unit_side)
@@ -2445,8 +2429,8 @@ func _draw() -> void:
 		var is_hit: bool = effect["hit"]
 		var alpha: float = clampf(t_remaining / FIRE_EFFECT_DURATION, 0.0, 1.0)
 
-		var from_screen := (_hex_to_pixel(from_hex.x, from_hex.y) - camera_offset / zoom_level) * zoom_level
-		var to_screen := (_hex_to_pixel(to_hex.x, to_hex.y) - camera_offset / zoom_level) * zoom_level
+		var from_screen : Vector2 = (hex_grid.hex_to_pixel(from_hex.x, from_hex.y) - camera_offset / zoom_level) * zoom_level
+		var to_screen : Vector2 = (hex_grid.hex_to_pixel(to_hex.x, to_hex.y) - camera_offset / zoom_level) * zoom_level
 
 		# Fire line
 		var line_color := Color(1.0, 0.3, 0.1, alpha * 0.7)
@@ -2673,92 +2657,11 @@ func _calculate_los(unit: Dictionary) -> void:
 			var target := Vector2i(col, row)
 			if target == origin:
 				continue
-			if _hex_distance(origin, target) > spot_range:
+			if hex_grid.hex_distance(origin, target) > spot_range:
 				continue
-			if _has_los(origin, origin_elev, target):
+			if hex_grid.has_los(origin, origin_elev, target):
 				los_visible[target] = true
 
-
-func _hex_distance(a: Vector2i, b: Vector2i) -> int:
-	# Convert offset coords to cube coords then compute distance
-	var ac := _offset_to_cube(a)
-	var bc := _offset_to_cube(b)
-	return (absi(ac.x - bc.x) + absi(ac.y - bc.y) + absi(ac.z - bc.z)) / 2
-
-
-func _offset_to_cube(hex: Vector2i) -> Vector3i:
-	var q := hex.x
-	var r := hex.y - (hex.x - (hex.x & 1)) / 2
-	var s := -q - r
-	return Vector3i(q, r, s)
-
-
-func _cube_to_offset(cube: Vector3i) -> Vector2i:
-	var col := cube.x
-	var row := cube.y + (cube.x - (cube.x & 1)) / 2
-	return Vector2i(col, row)
-
-
-func _has_los(origin: Vector2i, origin_elev: int, target: Vector2i) -> bool:
-	# Walk a line from origin to target in cube coords, check each intermediate hex
-	var oc := _offset_to_cube(origin)
-	var tc := _offset_to_cube(target)
-	var dist := _hex_distance(origin, target)
-	if dist <= 1:
-		return true
-
-	var target_elev: int = elevation_grid[target.y][target.x]
-
-	# Lerp through cube coords
-	for step in range(1, dist):
-		var t := float(step) / float(dist)
-		var fq := lerpf(float(oc.x) + 1e-6, float(tc.x) + 1e-6, t)
-		var fr := lerpf(float(oc.y) + 1e-6, float(tc.y) + 1e-6, t)
-		var fs := lerpf(float(oc.z) - 2e-6, float(tc.z) - 2e-6, t)
-		var cube := _cube_round(fq, fr, fs)
-		var hex := _cube_to_offset(cube)
-
-		if hex.x < 0 or hex.x >= map_cols or hex.y < 0 or hex.y >= map_rows:
-			return false
-
-		var mid_elev: int = elevation_grid[hex.y][hex.x]
-		var mid_terrain: String = terrain_grid[hex.y][hex.x]
-		var hex_dist_from_origin := _hex_distance(origin, hex)
-
-		# Elevation blocking
-		var expected_elev := lerpf(float(origin_elev), float(target_elev), t)
-		if float(mid_elev) > expected_elev + 0.5:
-			return false
-
-		# Terrain blocking - adjacent hexes (distance 1) never block,
-		# you can see into the tree line but not through it
-		if hex_dist_from_origin <= 1:
-			continue
-
-		if mid_terrain == "W" or mid_terrain == "C":
-			if origin_elev < mid_elev + 2:
-				return false
-		elif mid_terrain == "T":
-			if origin_elev < mid_elev + 1:
-				return false
-
-	return true
-
-
-func _cube_round(fq: float, fr: float, fs: float) -> Vector3i:
-	var q := roundi(fq)
-	var r := roundi(fr)
-	var s := roundi(fs)
-	var q_diff := absf(float(q) - fq)
-	var r_diff := absf(float(r) - fr)
-	var s_diff := absf(float(s) - fs)
-	if q_diff > r_diff and q_diff > s_diff:
-		q = -r - s
-	elif r_diff > s_diff:
-		r = -q - s
-	else:
-		s = -q - r
-	return Vector3i(q, r, s)
 
 
 func _update_info_label() -> void:
@@ -2803,8 +2706,8 @@ func _unhandled_input(event: InputEvent) -> void:
 				_handle_move_order(mb.position)
 			else:
 				var world_pos := mb.position / zoom_level + camera_offset / zoom_level
-				var hex_coord := _pixel_to_hex(world_pos)
-				if _is_valid_hex(hex_coord):
+				var hex_coord: Vector2i = hex_grid.pixel_to_hex(world_pos)
+				if hex_grid.is_valid_hex(hex_coord):
 					selected_hex = hex_coord
 					_update_selected_unit()
 					queue_redraw()
@@ -2825,9 +2728,9 @@ func _unhandled_input(event: InputEvent) -> void:
 			queue_redraw()
 		else:
 			var world_pos := mm.position / zoom_level + camera_offset / zoom_level
-			var hex_coord := _pixel_to_hex(world_pos)
+			var hex_coord: Vector2i = hex_grid.pixel_to_hex(world_pos)
 			if hex_coord != hovered_hex:
-				hovered_hex = hex_coord if _is_valid_hex(hex_coord) else Vector2i(-1, -1)
+				hovered_hex = hex_coord if hex_grid.is_valid_hex(hex_coord) else Vector2i(-1, -1)
 				queue_redraw()
 
 	elif event is InputEventKey and event.pressed:
@@ -2896,8 +2799,8 @@ func _handle_move_order(screen_pos: Vector2) -> void:
 		return
 
 	var world_pos := screen_pos / zoom_level + camera_offset / zoom_level
-	var target := _pixel_to_hex(world_pos)
-	if not _is_valid_hex(target):
+	var target: Vector2i = hex_grid.pixel_to_hex(world_pos)
+	if not hex_grid.is_valid_hex(target):
 		return
 
 	var unit_pos := Vector2i(selected_unit["col"], selected_unit["row"])
@@ -2952,37 +2855,3 @@ func _clamp_camera() -> void:
 	camera_offset.y = clampf(camera_offset.y, -hex_size * zoom_level, max_y)
 
 
-func _hex_to_pixel(col: int, row: int) -> Vector2:
-	var x := col * hex_width * 0.75
-	var y := row * hex_height
-	if col % 2 == 1:
-		y += hex_height * 0.5
-	return Vector2(x, y)
-
-
-func _pixel_to_hex(pixel: Vector2) -> Vector2i:
-	var approx_col := pixel.x / (hex_width * 0.75)
-	var col := int(round(approx_col))
-	var y_offset := 0.0
-	if col % 2 == 1:
-		y_offset = hex_height * 0.5
-	var approx_row := (pixel.y - y_offset) / hex_height
-	var row := int(round(approx_row))
-
-	var best := Vector2i(col, row)
-	var best_dist := pixel.distance_to(_hex_to_pixel(col, row))
-	for dc in range(-1, 2):
-		for dr in range(-1, 2):
-			var c := col + dc
-			var r := row + dr
-			if c < 0 or r < 0:
-				continue
-			var dist := pixel.distance_to(_hex_to_pixel(c, r))
-			if dist < best_dist:
-				best_dist = dist
-				best = Vector2i(c, r)
-	return best
-
-
-func _is_valid_hex(coord: Vector2i) -> bool:
-	return coord.x >= 0 and coord.x < map_cols and coord.y >= 0 and coord.y < map_rows
