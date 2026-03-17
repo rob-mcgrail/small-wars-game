@@ -82,7 +82,22 @@ static func _parse_dict(ctx: Dictionary, base_indent: int) -> Dictionary:
 		var key := stripped.substr(0, colon_pos).strip_edges()
 		var after_colon := stripped.substr(colon_pos + 1).strip_edges()
 
-		if after_colon != "":
+		if after_colon == "|" or after_colon == ">":
+			# Literal block scalar (|) or folded scalar (>)
+			ctx["pos"] += 1
+			var block_lines: Array[String] = []
+			while ctx["pos"] < ctx["lines"].size():
+				var block_line: String = ctx["lines"][ctx["pos"]]
+				var block_indent := _current_indent(block_line)
+				if block_indent <= base_indent:
+					break  # Back to same or lower indent = end of block
+				block_lines.append(block_line.strip_edges())
+				ctx["pos"] += 1
+			if after_colon == "|":
+				result[key] = "\n".join(block_lines)
+			else:
+				result[key] = " ".join(block_lines)
+		elif after_colon != "":
 			# Inline value
 			result[key] = _parse_scalar(after_colon)
 			ctx["pos"] += 1

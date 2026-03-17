@@ -214,6 +214,9 @@ func _ready() -> void:
 		fog_of_war_mode = str(scenario_loader.player_faction.get("fog_of_war", "approximate"))
 		satellite_range = int(scenario_loader.player_faction.get("satellite_range", 6))
 		_init_fog_of_war()
+	elif scenario_loader != null:
+		# Faction not loaded but scenario exists - try loading fog from overrides
+		_init_fog_of_war()
 
 	_setup_display_bar()  # Also creates info_label
 	# Run one tick to initialize all systems (comms, morale, LOS, etc.)
