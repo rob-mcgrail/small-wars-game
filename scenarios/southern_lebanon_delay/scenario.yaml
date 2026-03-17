@@ -1,0 +1,169 @@
+name: "Delay at the Border"
+description: "July 2006. Delay the IDF advance to the Litani."
+briefing: |
+  Commander, Israeli armored forces are massing at the border.
+  Intelligence indicates a battalion-strength push toward Bint Jbeil
+  and the Litani crossing, beginning at nightfall.
+
+  Your forces are positioned in the hills above the border.
+  Use the terrain. Set ambushes. Delay their advance.
+
+  They must not reach the Litani before noon tomorrow.
+
+  You have the night on your side - they have thermal optics, but
+  your fighters know every wadi and olive grove in these hills.
+
+start_hour: 18
+start_minute: 0
+sunrise_hour: 5
+sunset_hour: 20
+
+victory:
+  primary:
+    type: hold_line
+    row: 5
+    unit_filter: armored
+    until_hour: 12
+    until_minute: 0
+    description: "No enemy armor crosses the Litani line before 12:00 PM"
+
+  bonus:
+    - type: destroy_count
+      side: enemy
+      count: 4
+      points: 50
+      description: "Destroy 4 or more enemy vehicles"
+    - type: destroy_count
+      side: enemy
+      count: 8
+      points: 100
+      description: "Destroy 8 or more enemy vehicles"
+    - type: survive_all
+      unit_filter: is_hq
+      side: player
+      points: 75
+      description: "All HQ units survive"
+
+  defeat:
+    type: line_crossed
+    row: 5
+    unit_filter: armored
+    side: enemy
+    description: "Enemy armor has crossed the Litani line"
+
+  time_limit_hours: 18
+
+player_forces:
+  - template: hzb_bhq
+    name: "Bn HQ - Deir Mimas"
+    hex: [30, 5]
+
+  - template: hzb_shq
+    name: "Co HQ - Haris"
+    hex: [30, 12]
+    assigned_hq: "Bn HQ - Deir Mimas"
+
+  - template: hzb_atgm
+    name: "Kornet Team 1"
+    hex: [22, 22]
+    assigned_hq: "Co HQ - Haris"
+
+  - template: hzb_atgm
+    name: "Kornet Team 2"
+    hex: [38, 25]
+    assigned_hq: "Co HQ - Haris"
+
+  - template: hzb_atgm
+    name: "Kornet Team 3"
+    hex: [15, 18]
+    assigned_hq: "Co HQ - Haris"
+
+  - template: hzb_infantry
+    name: "Fighter Squad 1"
+    hex: [20, 20]
+    assigned_hq: "Co HQ - Haris"
+
+  - template: hzb_infantry
+    name: "Fighter Squad 2"
+    hex: [25, 28]
+    assigned_hq: "Co HQ - Haris"
+
+  - template: hzb_infantry
+    name: "Fighter Squad 3"
+    hex: [40, 22]
+    assigned_hq: "Co HQ - Haris"
+
+  - template: hzb_technical
+    name: "Technical 1"
+    hex: [28, 15]
+    assigned_hq: "Co HQ - Haris"
+
+  - template: hzb_technical
+    name: "Technical 2"
+    hex: [35, 18]
+    assigned_hq: "Co HQ - Haris"
+
+enemy_forces:
+  - template: idf_shq
+    name: "IDF Co HQ"
+    hex: [30, 43]
+    default_roe: "return fire"
+
+  - template: idf_merkava
+    name: "Merkava 1"
+    hex: [28, 44]
+    default_roe: "fire at will"
+
+  - template: idf_merkava
+    name: "Merkava 2"
+    hex: [32, 44]
+    default_roe: "fire at will"
+
+  - template: idf_namer
+    name: "Namer APC 1"
+    hex: [30, 44]
+    default_roe: "return fire"
+
+  - template: idf_namer
+    name: "Namer APC 2"
+    hex: [26, 44]
+    default_roe: "return fire"
+
+reinforcements:
+  - time_hour: 20
+    time_minute: 0
+    side: enemy
+    units:
+      - template: idf_merkava
+        name: "Merkava 3"
+        hex: [35, 44]
+        default_roe: "fire at will"
+      - template: idf_merkava
+        name: "Merkava 4"
+        hex: [25, 44]
+        default_roe: "fire at will"
+      - template: idf_namer
+        name: "Namer APC 3"
+        hex: [30, 44]
+        default_roe: "return fire"
+
+  - time_hour: 6
+    time_minute: 0
+    side: enemy
+    units:
+      - template: idf_merkava
+        name: "Merkava 5"
+        hex: [20, 44]
+        default_roe: "fire at will"
+      - template: idf_merkava
+        name: "Merkava 6"
+        hex: [40, 44]
+        default_roe: "fire at will"
+      - template: idf_infantry
+        name: "IDF Infantry 1"
+        hex: [30, 44]
+        default_roe: "fire at will"
+      - template: idf_infantry
+        name: "IDF Infantry 2"
+        hex: [35, 44]
+        default_roe: "fire at will"

@@ -2,6 +2,15 @@ extends Node2D
 
 # Set before adding to scene tree
 var map_file: String = ""
+var scenario_file: String = ""
+
+# Scenario state
+var scenario_loader: ScenarioLoader = null
+var reinforcements_spawned: Dictionary = {}  # int index -> true
+var scenario_ended: bool = false
+var enemy_ai_accum: float = 0.0
+const ENEMY_AI_INTERVAL: float = 15.0  # game minutes between AI updates
+var victory_panel: CanvasLayer = null
 
 # Map data
 var hex_size: float
@@ -155,12 +164,43 @@ func _ready() -> void:
 	_load_unit_types()
 	_load_display_config()
 	_load_hq_config()
+
+	# Scenario loading: set map_file from scenario, then load map normally
+	if scenario_file != "":
+		scenario_loader = ScenarioLoader.new()
+		if scenario_loader.load_scenario(scenario_file):
+			map_file = scenario_loader.map_path
+		else:
+			push_error("hex_map: Failed to load scenario %s" % scenario_file)
+			scenario_loader = null
+
 	_load_map()
 	hex_grid = HexGrid.new(terrain_grid, elevation_grid, map_cols, map_rows, hex_size)
-	_place_starting_units()
+
+	if scenario_loader != null:
+		_load_scenario_forces(scenario_loader)
+	else:
+		_place_starting_units()
+
 	_setup_hex_panel()
 	_setup_unit_panel()
 	_setup_game_flow()
+
+	# Override clock and day/night from scenario
+	if scenario_loader != null:
+		game_clock.game_time_minutes = float(scenario_loader.start_hour) * 60.0 + float(scenario_loader.start_minute)
+		game_clock.next_orders_at = game_clock.game_time_minutes + ooda_base_cycle
+		if scenario_loader.sunrise_hour >= 0:
+			sunrise_hour = scenario_loader.sunrise_hour
+			combat_resolver.sunrise_hour = sunrise_hour
+			hq_comms.sunrise_hour = sunrise_hour
+			game_flow_panel.sunrise = sunrise_hour
+		if scenario_loader.sunset_hour >= 0:
+			sunset_hour = scenario_loader.sunset_hour
+			combat_resolver.sunset_hour = sunset_hour
+			hq_comms.sunset_hour = sunset_hour
+			game_flow_panel.sunset = sunset_hour
+
 	_setup_display_bar()  # Also creates info_label
 	# Run one tick to initialize all systems (comms, morale, LOS, etc.)
 	_on_time_advanced(0.0)
@@ -365,6 +405,461 @@ func _init_unit_ammo_and_morale(unit: Dictionary) -> void:
 	unit["in_comms"] = false
 	unit["in_hq_los"] = false
 	unit["hq_switch_remaining"] = 0.0
+
+
+func _load_scenario_forces(loader: ScenarioLoader) -> void:
+	## Register scenario templates as unit types and spawn all units.
+	if terrain_grid.is_empty():
+		return
+
+	# Register each resolved template as a unit type (merges into global dict)
+	for template_key in loader.templates:
+		var resolved: Dictionary = loader.get_resolved_template(template_key)
+		if resolved.is_empty():
+			continue
+		# Use the template key as the type code
+		resolved["code"] = template_key
+		# Parse icon_color to Color
+		resolved["icon_color"] = Color(resolved.get("icon_color", "#ffffff"))
+		unit_types[template_key] = resolved
+
+	# Spawn player forces
+	for entry in loader.player_forces:
+		_spawn_scenario_unit(entry, "player")
+
+	# Spawn enemy forces
+	for entry in loader.enemy_forces:
+		_spawn_scenario_unit(entry, "enemy")
+
+	# Resolve HQ assignments after all units exist
+	_resolve_hq_assignments()
+
+
+func _spawn_scenario_unit(entry: Dictionary, default_side: String) -> Dictionary:
+	## Create a single unit from a scenario force entry.
+	## Supports both template-based (new) and type-based (legacy) entries.
+	var type_code: String = ""
+	if entry.has("template"):
+		type_code = str(entry.get("template", ""))
+	else:
+		type_code = str(entry.get("type", "TEC"))
+
+	var hex_arr = entry.get("hex", [0, 0])
+	var col: int = int(hex_arr[0]) if hex_arr is Array and hex_arr.size() > 0 else 0
+	var row: int = int(hex_arr[1]) if hex_arr is Array and hex_arr.size() > 1 else 0
+
+	# Clamp to map bounds
+	col = clampi(col, 0, map_cols - 1)
+	row = clampi(row, 0, map_rows - 1)
+
+	var unit_name: String = str(entry.get("name", "%s_%d" % [type_code, units.size()]))
+	var side: String = str(entry.get("side", default_side))
+
+	var unit_dict: Dictionary = {
+		"type_code": type_code,
+		"col": col,
+		"row": row,
+		"name": unit_name,
+		"side": side,
+	}
+
+	# Set default ROE if specified
+	var default_roe: String = str(entry.get("default_roe", ""))
+	if default_roe != "":
+		unit_dict["default_roe"] = default_roe
+
+	_init_unit_ammo_and_morale(unit_dict)
+
+	# Override assigned_hq from scenario if specified
+	var assigned_hq: String = str(entry.get("assigned_hq", ""))
+	if assigned_hq != "":
+		unit_dict["assigned_hq"] = assigned_hq
+
+	units.append(unit_dict)
+	return unit_dict
+
+
+func _resolve_hq_assignments() -> void:
+	## For units without an assigned HQ, try to find an appropriate one.
+	## HQ units at level 2 (company) get assigned to the nearest level 1 (battalion) HQ.
+	## Non-HQ units without assignment get the nearest company HQ of their side.
+	var hq_units: Array = []
+	for unit in units:
+		var utype: Dictionary = unit_types.get(unit.get("type_code", ""), {})
+		if utype.get("is_hq", false):
+			hq_units.append(unit)
+
+	for unit in units:
+		if unit.get("assigned_hq", "") != "":
+			continue
+		var utype: Dictionary = unit_types.get(unit.get("type_code", ""), {})
+		if utype.get("is_hq", false):
+			var my_level: int = int(utype.get("hq_level", 0))
+			if my_level >= 2:
+				# Company/section HQ -> assign to nearest battalion HQ
+				_assign_nearest_hq(unit, hq_units, 1)
+		else:
+			# Regular unit -> assign to nearest company HQ of same side
+			_assign_nearest_hq(unit, hq_units, 2)
+
+
+func _assign_nearest_hq(unit: Dictionary, hq_units: Array, target_level: int) -> void:
+	var side: String = unit.get("side", "player")
+	var best_name: String = ""
+	var best_dist: float = INF
+	var unit_pos := Vector2(unit.get("col", 0), unit.get("row", 0))
+
+	for hq in hq_units:
+		if hq.get("side", "player") != side:
+			continue
+		var hq_type: Dictionary = unit_types.get(hq.get("type_code", ""), {})
+		var hq_level: int = int(hq_type.get("hq_level", 0))
+		if hq_level != target_level:
+			continue
+		var hq_pos := Vector2(hq.get("col", 0), hq.get("row", 0))
+		var dist: float = unit_pos.distance_to(hq_pos)
+		if dist < best_dist:
+			best_dist = dist
+			best_name = hq.get("name", "")
+
+	if best_name != "":
+		unit["assigned_hq"] = best_name
+
+
+func _check_reinforcements() -> void:
+	## Spawn reinforcement waves when their time has arrived.
+	if scenario_loader == null:
+		return
+	var current_hour: int = (int(game_clock.game_time_minutes) / 60) % 24
+	var current_minute: int = int(game_clock.game_time_minutes) % 60
+
+	for i in range(scenario_loader.reinforcements.size()):
+		if i in reinforcements_spawned:
+			continue
+		var rf: Dictionary = scenario_loader.reinforcements[i]
+		var rf_hour: int = int(rf.get("time_hour", 0))
+		var rf_minute: int = int(rf.get("time_minute", 0))
+
+		# Convert to minutes-since-midnight for comparison
+		var rf_time: int = rf_hour * 60 + rf_minute
+		var cur_time: int = current_hour * 60 + current_minute
+
+		# Handle day wrap: if scenario starts at 18:00 and reinforcement is at 06:00,
+		# we need the game_time_minutes to have actually reached that point
+		var game_minutes_for_rf: float = 0.0
+		var start_minutes: float = float(scenario_loader.start_hour) * 60.0 + float(scenario_loader.start_minute)
+		if rf_time >= int(start_minutes):
+			game_minutes_for_rf = float(rf_time)
+		else:
+			# Next day
+			game_minutes_for_rf = float(rf_time) + 1440.0
+
+		if game_clock.game_time_minutes >= game_minutes_for_rf:
+			reinforcements_spawned[i] = true
+			var side: String = str(rf.get("side", "enemy"))
+			var rf_units = rf.get("units", [])
+			if rf_units is Array:
+				for entry in rf_units:
+					_spawn_scenario_unit(entry, side)
+			# Re-resolve HQ assignments for new units
+			_resolve_hq_assignments()
+
+
+func _check_victory_conditions() -> void:
+	## Check scenario victory/defeat conditions each tick.
+	if scenario_loader == null or scenario_ended:
+		return
+
+	var victory_data: Dictionary = scenario_loader.victory
+
+	# Check defeat condition first (enemy crossing the line)
+	var defeat: Dictionary = victory_data.get("defeat", {})
+	if not defeat.is_empty():
+		if _evaluate_condition(defeat, true):
+			_end_scenario(false, defeat.get("description", "Defeat"))
+			return
+
+	# Check primary victory: hold_line means we win when the timer expires without defeat
+	var primary: Dictionary = victory_data.get("primary", {})
+	if not primary.is_empty():
+		var primary_type: String = str(primary.get("type", ""))
+		if primary_type == "hold_line":
+			var until_hour: int = int(primary.get("until_hour", 24))
+			var until_minute: int = int(primary.get("until_minute", 0))
+			var until_time: float = float(until_hour) * 60.0 + float(until_minute)
+			# Handle day wrap
+			var start_minutes: float = float(scenario_loader.start_hour) * 60.0 + float(scenario_loader.start_minute)
+			if until_time <= start_minutes:
+				until_time += 1440.0
+			if game_clock.game_time_minutes >= until_time:
+				_end_scenario(true, primary.get("description", "Victory"))
+				return
+
+	# Check time limit
+	var time_limit: float = float(victory_data.get("time_limit_hours", 0))
+	if time_limit > 0:
+		var start_minutes: float = float(scenario_loader.start_hour) * 60.0 + float(scenario_loader.start_minute)
+		var end_time: float = start_minutes + time_limit * 60.0
+		if game_clock.game_time_minutes >= end_time:
+			# Time's up - check if defeat condition is met, otherwise victory
+			if not defeat.is_empty() and _evaluate_condition(defeat, true):
+				_end_scenario(false, defeat.get("description", "Defeat"))
+			else:
+				_end_scenario(true, primary.get("description", "Victory - time expired"))
+			return
+
+
+func _evaluate_condition(condition: Dictionary, is_defeat: bool) -> bool:
+	## Evaluate a single victory/defeat condition.
+	var cond_type: String = str(condition.get("type", ""))
+	match cond_type:
+		"line_crossed":
+			return _check_line_crossed(condition)
+		"hold_line":
+			# hold_line as defeat: true if any matching unit crossed
+			return _check_line_crossed(condition)
+		"destroy_count":
+			return _check_destroy_count(condition)
+		"survive_all":
+			return _check_survive_all(condition)
+	return false
+
+
+func _check_line_crossed(condition: Dictionary) -> bool:
+	## Check if any unit matching the filter has crossed the specified row.
+	var target_row: int = int(condition.get("row", 0))
+	var unit_filter: String = str(condition.get("unit_filter", ""))
+	var side: String = str(condition.get("side", "enemy"))
+
+	for unit in units:
+		if unit.get("unit_status", "") == "DESTROYED":
+			continue
+		if unit.get("side", "player") != side:
+			continue
+		if not _unit_matches_filter(unit, unit_filter):
+			continue
+		# "Crossed" means the unit's row is <= the target row (advancing north = decreasing row)
+		if int(unit.get("row", 999)) <= target_row:
+			return true
+	return false
+
+
+func _check_destroy_count(condition: Dictionary) -> bool:
+	## Check if enough units of the specified side have been destroyed.
+	var target_count: int = int(condition.get("count", 0))
+	var side: String = str(condition.get("side", "enemy"))
+	var destroyed: int = 0
+	for unit in units:
+		if unit.get("side", "player") != side:
+			continue
+		if unit.get("unit_status", "") == "DESTROYED":
+			destroyed += 1
+	return destroyed >= target_count
+
+
+func _check_survive_all(condition: Dictionary) -> bool:
+	## Check if all matching units are still alive. Returns true if ALL survive.
+	var unit_filter: String = str(condition.get("unit_filter", ""))
+	var side: String = str(condition.get("side", "player"))
+	for unit in units:
+		if unit.get("side", "player") != side:
+			continue
+		if not _unit_matches_filter(unit, unit_filter):
+			continue
+		if unit.get("unit_status", "") == "DESTROYED":
+			return false
+	return true
+
+
+func _unit_matches_filter(unit: Dictionary, filter_name: String) -> bool:
+	## Check if a unit matches a named filter from scenario conditions.
+	if filter_name == "":
+		return true
+	var utype: Dictionary = unit_types.get(unit.get("type_code", ""), {})
+	match filter_name:
+		"armored":
+			return utype.get("is_armored", false)
+		"is_hq":
+			return utype.get("is_hq", false)
+		"infantry":
+			return not utype.get("is_armored", false) and not utype.get("is_hq", false)
+	# Fallback: check if the filter matches the type code
+	return unit.get("type_code", "") == filter_name
+
+
+func _end_scenario(is_victory: bool, description: String) -> void:
+	scenario_ended = true
+	game_clock.paused = true
+	game_flow_panel.set_paused(true)
+
+	# Evaluate bonus objectives
+	var bonuses_achieved: Array[String] = []
+	var total_bonus_points: int = 0
+	if scenario_loader != null:
+		var bonus_list = scenario_loader.victory.get("bonus", [])
+		if bonus_list is Array:
+			for bonus in bonus_list:
+				var achieved := false
+				var bonus_type: String = str(bonus.get("type", ""))
+				match bonus_type:
+					"destroy_count":
+						achieved = _check_destroy_count(bonus)
+					"survive_all":
+						achieved = _check_survive_all(bonus)
+				if achieved:
+					var pts: int = int(bonus.get("points", 0))
+					total_bonus_points += pts
+					bonuses_achieved.append("%s (+%d)" % [str(bonus.get("description", "")), pts])
+
+	_show_victory_panel(is_victory, description, bonuses_achieved, total_bonus_points)
+
+
+func _show_victory_panel(is_victory: bool, description: String, bonuses: Array[String], bonus_points: int) -> void:
+	if victory_panel != null:
+		victory_panel.queue_free()
+
+	victory_panel = CanvasLayer.new()
+	victory_panel.layer = 20
+	add_child(victory_panel)
+
+	# Dim background
+	var dim := ColorRect.new()
+	dim.color = Color(0.0, 0.0, 0.0, 0.5)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	victory_panel.add_child(dim)
+
+	# Center anchor
+	var anchor := Control.new()
+	anchor.set_anchors_preset(Control.PRESET_CENTER)
+	victory_panel.add_child(anchor)
+
+	var panel := PanelContainer.new()
+	panel.custom_minimum_size = Vector2(500, 0)
+	panel.position = Vector2(-250, -150)
+
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.08, 0.08, 0.06, 0.95)
+	style.border_color = Color(0.5, 0.45, 0.3, 0.8) if is_victory else Color(0.6, 0.2, 0.2, 0.8)
+	style.border_width_top = 2
+	style.border_width_left = 2
+	style.border_width_right = 2
+	style.border_width_bottom = 2
+	style.content_margin_left = 24.0
+	style.content_margin_right = 24.0
+	style.content_margin_top = 20.0
+	style.content_margin_bottom = 20.0
+	style.corner_radius_top_left = 4
+	style.corner_radius_top_right = 4
+	style.corner_radius_bottom_left = 4
+	style.corner_radius_bottom_right = 4
+	panel.add_theme_stylebox_override("panel", style)
+	anchor.add_child(panel)
+
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 12)
+	panel.add_child(vbox)
+
+	# Header
+	var header := Label.new()
+	header.text = "VICTORY" if is_victory else "DEFEAT"
+	header.add_theme_font_size_override("font_size", 36)
+	header.add_theme_color_override("font_color",
+		Color(0.9, 0.85, 0.5) if is_victory else Color(0.9, 0.3, 0.3))
+	header.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(header)
+
+	# Description
+	var desc := Label.new()
+	desc.text = description
+	desc.add_theme_font_size_override("font_size", 18)
+	desc.add_theme_color_override("font_color", Color(0.8, 0.78, 0.7))
+	desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	vbox.add_child(desc)
+
+	# Bonus objectives
+	if not bonuses.is_empty():
+		var bonus_header := Label.new()
+		bonus_header.text = "Bonus Objectives Achieved:"
+		bonus_header.add_theme_font_size_override("font_size", 16)
+		bonus_header.add_theme_color_override("font_color", Color(0.7, 0.68, 0.55))
+		vbox.add_child(bonus_header)
+
+		for b in bonuses:
+			var bl := Label.new()
+			bl.text = "  - %s" % b
+			bl.add_theme_font_size_override("font_size", 15)
+			bl.add_theme_color_override("font_color", Color(0.75, 0.8, 0.55))
+			vbox.add_child(bl)
+
+		var points_label := Label.new()
+		points_label.text = "Total bonus: %d points" % bonus_points
+		points_label.add_theme_font_size_override("font_size", 16)
+		points_label.add_theme_color_override("font_color", Color(0.85, 0.82, 0.5))
+		vbox.add_child(points_label)
+
+	# Spacer
+	var spacer := Control.new()
+	spacer.custom_minimum_size = Vector2(0, 8)
+	vbox.add_child(spacer)
+
+	# Return to menu button
+	var btn := Button.new()
+	btn.text = "Return to Menu"
+	btn.custom_minimum_size = Vector2(200, 40)
+	btn.add_theme_font_size_override("font_size", 18)
+	btn.pressed.connect(_on_return_to_menu)
+	vbox.add_child(btn)
+
+
+func _on_return_to_menu() -> void:
+	# Signal up to game_manager via input event
+	var event := InputEventKey.new()
+	event.keycode = KEY_F10
+	event.pressed = true
+	Input.parse_input_event(event)
+
+
+func _update_enemy_ai() -> void:
+	## Very basic enemy AI: move unordered enemy units toward row 0 (north).
+	if scenario_loader == null:
+		return
+
+	for unit in units:
+		if unit.get("side", "player") != "enemy":
+			continue
+		if unit.get("unit_status", "") in ["DESTROYED", "ROUTING"]:
+			continue
+
+		var uname: String = unit.get("name", "")
+		var existing_order: Order = order_manager.get_order(uname)
+		if existing_order != null and existing_order.status != Order.Status.COMPLETE:
+			continue
+
+		var utype: Dictionary = unit_types.get(unit.get("type_code", ""), {})
+		var is_hq: bool = utype.get("is_hq", false)
+
+		# Pick a target hex: advance north (toward row 0)
+		var cur_col: int = int(unit.get("col", 0))
+		var cur_row: int = int(unit.get("row", 0))
+		# Move ~8 hexes north, with slight variation to avoid stacking
+		var target_row: int = maxi(0, cur_row - 8)
+		var col_offset: int = (hash(uname) % 5) - 2  # -2 to +2 spread
+		var target_col: int = clampi(cur_col + col_offset, 0, map_cols - 1)
+		var target := Vector2i(target_col, target_row)
+
+		# HQ units use hold fire and stay further back
+		var ai_posture := Order.Posture.NORMAL
+		var ai_roe := Order.ROE.FIRE_AT_WILL
+		var ai_pursuit := Order.Pursuit.HOLD
+		if is_hq:
+			ai_roe = Order.ROE.HOLD_FIRE
+			target_row = maxi(0, cur_row - 4)
+			target = Vector2i(cur_col, target_row)
+
+		var hq_mod: float = hq_comms.get_hq_order_modifier(unit)
+		order_manager.issue_order(
+			unit, utype, Order.Type.MOVE, target,
+			game_clock.game_time_minutes, ai_posture, ai_roe, hq_mod, ai_pursuit)
 
 
 func _load_display_config() -> void:
@@ -1126,6 +1621,15 @@ func _on_time_advanced(minutes: float) -> void:
 	var ooda_display: Array = hq_comms.calculate_ooda_cycle()
 	game_flow_panel.cycle_label.text = "OODA cycle: %d min" % ceili(float(ooda_display[0]))
 	game_flow_panel.cycle_label.tooltip_text = "\n".join(ooda_display[1] as Array)
+	# Scenario systems
+	if scenario_loader != null and not scenario_ended:
+		_check_reinforcements()
+		_check_victory_conditions()
+		# Enemy AI: update every ENEMY_AI_INTERVAL game minutes
+		enemy_ai_accum += minutes
+		if enemy_ai_accum >= ENEMY_AI_INTERVAL:
+			enemy_ai_accum -= ENEMY_AI_INTERVAL
+			_update_enemy_ai()
 	# Write game state log
 	_write_game_log()
 	# Keep selection tracking the selected unit

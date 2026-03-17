@@ -1,0 +1,192 @@
+# Scenario: Delay at Southern Lebanon
+# Hezbollah defensive operation against IDF advance
+
+name: "Delay at the Border"
+description: "July 2006. IDF armored forces are advancing north from the border toward Bint Jbeil. Your mission: delay their advance. No enemy armored vehicle must cross the Litani River before noon tomorrow."
+
+map: "res://maps/southern_lebanon.yaml"
+
+# Time settings (override game.yaml)
+start_hour: 18
+start_minute: 0
+sunrise_hour: 5
+sunset_hour: 20
+
+# Briefing shown before scenario starts
+briefing: |
+  Commander, Israeli armored forces are massing at the border.
+  Intelligence indicates a battalion-strength push toward Bint Jbeil
+  and the Litani crossing, beginning at nightfall.
+
+  Your forces are positioned in the hills above the border.
+  Use the terrain. Set ambushes. Delay their advance.
+
+  They must not reach the Litani before noon tomorrow.
+
+  You have the night on your side - they have thermal optics, but
+  your fighters know every wadi and olive grove in these hills.
+
+# Victory conditions
+victory:
+  # Primary: no enemy armor crosses the victory line (row <= 5) before time
+  primary:
+    type: hold_line
+    row: 5
+    unit_filter: armored
+    until_hour: 12
+    until_minute: 0
+    description: "No enemy armor crosses the Litani line before 12:00 PM"
+
+  # Bonus objectives
+  bonus:
+    - type: destroy_count
+      side: enemy
+      count: 4
+      points: 50
+      description: "Destroy 4 or more enemy vehicles"
+    - type: destroy_count
+      side: enemy
+      count: 8
+      points: 100
+      description: "Destroy 8 or more enemy vehicles"
+    - type: survive_all
+      unit_filter: is_hq
+      side: player
+      points: 75
+      description: "All HQ units survive"
+
+  # Loss condition
+  defeat:
+    type: line_crossed
+    row: 5
+    unit_filter: armored
+    side: enemy
+    description: "Enemy armor has crossed the Litani line"
+
+  time_limit_hours: 18
+
+# Starting forces - Player (Hezbollah)
+player_forces:
+  # Battalion HQ - well back near Litani
+  - type: BHQ
+    name: "Bn HQ - Deir Mimas"
+    hex: [30, 5]
+
+  # Company HQ - central position
+  - type: SHQ
+    name: "Co HQ - Haris"
+    hex: [30, 12]
+    assigned_hq: "Bn HQ - Deir Mimas"
+
+  # ATGM teams - the main defensive weapons
+  - type: ATGM
+    name: "Kornet Team 1"
+    hex: [22, 22]
+    assigned_hq: "Co HQ - Haris"
+
+  - type: ATGM
+    name: "Kornet Team 2"
+    hex: [38, 25]
+    assigned_hq: "Co HQ - Haris"
+
+  - type: ATGM
+    name: "Kornet Team 3"
+    hex: [15, 18]
+    assigned_hq: "Co HQ - Haris"
+
+  # Infantry squads - for close defense and ambush
+  - type: INF_HZB
+    name: "Fighter Squad 1"
+    hex: [20, 20]
+    assigned_hq: "Co HQ - Haris"
+
+  - type: INF_HZB
+    name: "Fighter Squad 2"
+    hex: [25, 28]
+    assigned_hq: "Co HQ - Haris"
+
+  - type: INF_HZB
+    name: "Fighter Squad 3"
+    hex: [40, 22]
+    assigned_hq: "Co HQ - Haris"
+
+  # Technicals - mobile fire support and screening
+  - type: TEC
+    name: "Technical 1"
+    hex: [28, 15]
+    assigned_hq: "Co HQ - Haris"
+
+  - type: TEC
+    name: "Technical 2"
+    hex: [35, 18]
+    assigned_hq: "Co HQ - Haris"
+
+# Enemy forces - IDF
+# First wave enters from south edge at scenario start
+enemy_forces:
+  - type: IDF_SHQ
+    name: "IDF Co HQ"
+    hex: [30, 43]
+    default_roe: "return fire"
+
+  - type: MRK4
+    name: "Merkava 1"
+    hex: [28, 44]
+    default_roe: "fire at will"
+
+  - type: MRK4
+    name: "Merkava 2"
+    hex: [32, 44]
+    default_roe: "fire at will"
+
+  - type: NAMER
+    name: "Namer APC 1"
+    hex: [30, 44]
+    default_roe: "return fire"
+
+  - type: NAMER
+    name: "Namer APC 2"
+    hex: [26, 44]
+    default_roe: "return fire"
+
+# Reinforcements
+reinforcements:
+  # IDF second wave - 2 hours in
+  - time_hour: 20
+    time_minute: 0
+    side: enemy
+    units:
+      - type: MRK4
+        name: "Merkava 3"
+        hex: [35, 44]
+        default_roe: "fire at will"
+      - type: MRK4
+        name: "Merkava 4"
+        hex: [25, 44]
+        default_roe: "fire at will"
+      - type: NAMER
+        name: "Namer APC 3"
+        hex: [30, 44]
+        default_roe: "return fire"
+
+  # IDF third wave - morning push
+  - time_hour: 6
+    time_minute: 0
+    side: enemy
+    units:
+      - type: MRK4
+        name: "Merkava 5"
+        hex: [20, 44]
+        default_roe: "fire at will"
+      - type: MRK4
+        name: "Merkava 6"
+        hex: [40, 44]
+        default_roe: "fire at will"
+      - type: IDF_INF
+        name: "IDF Infantry 1"
+        hex: [30, 44]
+        default_roe: "fire at will"
+      - type: IDF_INF
+        name: "IDF Infantry 2"
+        hex: [35, 44]
+        default_roe: "fire at will"

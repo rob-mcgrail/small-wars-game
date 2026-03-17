@@ -1,0 +1,143 @@
+# Unit templates for this scenario
+# Weapons, optics, comms reference keys from equipment.yaml
+
+templates:
+  # Hezbollah
+  hzb_bhq:
+    name: "Hezbollah Battalion HQ"
+    icon_color: "#5a8a4a"
+    symbol: wheeled
+    speed_kmh: 70
+    is_hq: true
+    hq_level: 1
+    crew: 3
+    training: irregular
+    morale: 70
+    morale_recovery_per_min: 1.5
+    armor: 0
+    concealment: 2
+    optics: binoculars_10x
+    comms: motorola_hf
+    weapons: [rifles_crew]
+
+  hzb_shq:
+    name: "Hezbollah Company HQ"
+    icon_color: "#4a7a5a"
+    symbol: wheeled
+    speed_kmh: 70
+    is_hq: true
+    hq_level: 2
+    crew: 3
+    training: irregular
+    morale: 65
+    morale_recovery_per_min: 1.2
+    armor: 0
+    concealment: 2
+    optics: binoculars_7x
+    comms: motorola_vhf
+    weapons: [rifles_crew]
+
+  hzb_technical:
+    name: "Technical"
+    icon_color: "#d4a44a"
+    symbol: wheeled
+    speed_kmh: 80
+    crew: 4
+    training: militia
+    morale: 50
+    morale_recovery_per_min: 1.0
+    armor: 0
+    concealment: 2
+    optics: eyesight
+    weapons: [dshk, ak47_crew]
+
+  hzb_atgm:
+    name: "ATGM Team"
+    icon_color: "#6a8a3a"
+    symbol: infantry
+    speed_kmh: 4
+    crew: 2
+    training: veteran
+    morale: 75
+    morale_recovery_per_min: 0.8
+    armor: 0
+    concealment: 8
+    optics: kornet_thermal
+    weapons: [kornet, ak74]
+
+  hzb_infantry:
+    name: "Fighter Squad"
+    icon_color: "#5a7a3a"
+    symbol: infantry
+    speed_kmh: 4
+    crew: 8
+    training: irregular
+    morale: 70
+    morale_recovery_per_min: 1.0
+    armor: 0
+    concealment: 7
+    optics: binoculars
+    weapons: [rpg29, ak47_squad, pkm]
+
+  # IDF
+  idf_shq:
+    name: "IDF Company HQ"
+    icon_color: "#5a7aaa"
+    symbol: wheeled
+    speed_kmh: 55
+    is_hq: true
+    hq_level: 2
+    is_armored: true
+    crew: 4
+    training: regular
+    morale: 65
+    morale_recovery_per_min: 1.5
+    armor: 5
+    concealment: 1
+    optics: commander_thermal
+    comms: harris_tac
+    weapons: [m2hb]
+
+  idf_merkava:
+    name: "Merkava Mk4"
+    icon_color: "#4a6a8a"
+    symbol: wheeled
+    speed_kmh: 60
+    is_armored: true
+    crew: 4
+    training: regular
+    morale: 65
+    morale_recovery_per_min: 1.5
+    armor: 9
+    concealment: 1
+    optics: commander_thermal
+    weapons: [m253_120mm, coax_762, m2hb]
+
+  idf_namer:
+    name: "Namer APC"
+    icon_color: "#5a7a9a"
+    symbol: wheeled
+    speed_kmh: 55
+    is_armored: true
+    crew: 3
+    training: regular
+    morale: 60
+    morale_recovery_per_min: 1.2
+    armor: 7
+    concealment: 1
+    optics: commander_sight
+    weapons: [m2hb]
+
+  idf_infantry:
+    name: "IDF Infantry"
+    icon_color: "#6a8aaa"
+    symbol: infantry
+    speed_kmh: 4
+    crew: 8
+    training: regular
+    morale: 60
+    morale_recovery_per_min: 1.5
+    armor: 0
+    concealment: 5
+    optics: binos_thermal
+    weapons: [tavor_squad, fn_mag, spike_sr]

@@ -1,0 +1,205 @@
+weapons:
+  kornet:
+    name: "9M133 Kornet"
+    type: atgm
+    range_km: 5.0
+    range_moving_km: 0.0
+    suppressive_range_km: 5.0
+    rate_of_fire: 2
+    vs_soft: 4
+    vs_armor: 9
+    ammo: 6
+    platform_accuracy: 0.8
+
+  rpg29:
+    name: "RPG-29"
+    type: rpg
+    range_km: 0.5
+    range_moving_km: 0.2
+    suppressive_range_km: 0.5
+    rate_of_fire: 3
+    vs_soft: 6
+    vs_armor: 7
+    ammo: 8
+    platform_accuracy: 0.6
+
+  ak47_crew:
+    name: "AK-47s (crew)"
+    type: rifle
+    range_km: 0.5
+    range_moving_km: 0.1
+    suppressive_range_km: 0.8
+    rate_of_fire: 100
+    vs_soft: 3
+    vs_armor: 0
+    ammo: 360
+    platform_accuracy: 0.7
+
+  ak74:
+    name: "AK-74s"
+    type: rifle
+    range_km: 0.5
+    range_moving_km: 0.2
+    suppressive_range_km: 0.8
+    rate_of_fire: 80
+    vs_soft: 3
+    vs_armor: 0
+    ammo: 300
+    platform_accuracy: 1.0
+
+  ak47_squad:
+    name: "AK-47s (squad)"
+    type: rifle
+    range_km: 0.5
+    range_moving_km: 0.2
+    suppressive_range_km: 0.8
+    rate_of_fire: 200
+    vs_soft: 4
+    vs_armor: 0
+    ammo: 1200
+    platform_accuracy: 1.0
+
+  pkm:
+    name: "PKM"
+    type: mg
+    range_km: 1.0
+    range_moving_km: 0.3
+    suppressive_range_km: 1.5
+    rate_of_fire: 250
+    vs_soft: 6
+    vs_armor: 0
+    ammo: 500
+    platform_accuracy: 0.9
+
+  dshk:
+    name: "DShK 12.7mm"
+    type: hmg
+    range_km: 1.5
+    range_moving_km: 0.5
+    suppressive_range_km: 2.0
+    rate_of_fire: 600
+    vs_soft: 8
+    vs_armor: 1
+    ammo: 500
+    platform_accuracy: 0.3
+
+  m253_120mm:
+    name: "120mm M253"
+    type: cannon
+    range_km: 3.0
+    range_moving_km: 2.0
+    suppressive_range_km: 3.0
+    rate_of_fire: 6
+    vs_soft: 9
+    vs_armor: 8
+    ammo: 46
+    platform_accuracy: 0.7
+
+  coax_762:
+    name: "Coaxial 7.62mm"
+    type: mg
+    range_km: 1.5
+    range_moving_km: 0.8
+    suppressive_range_km: 2.0
+    rate_of_fire: 400
+    vs_soft: 6
+    vs_armor: 0
+    ammo: 6000
+    platform_accuracy: 0.5
+
+  m2hb:
+    name: "12.7mm M2 HB"
+    type: hmg
+    range_km: 1.8
+    range_moving_km: 0.8
+    suppressive_range_km: 2.0
+    rate_of_fire: 500
+    vs_soft: 7
+    vs_armor: 1
+    ammo: 1800
+    platform_accuracy: 0.5
+
+  tavor_squad:
+    name: "Tavor rifles (squad)"
+    type: rifle
+    range_km: 0.5
+    range_moving_km: 0.2
+    suppressive_range_km: 0.8
+    rate_of_fire: 200
+    vs_soft: 4
+    vs_armor: 0
+    ammo: 1500
+    platform_accuracy: 1.0
+
+  fn_mag:
+    name: "FN MAG"
+    type: mg
+    range_km: 1.2
+    range_moving_km: 0.4
+    suppressive_range_km: 1.8
+    rate_of_fire: 300
+    vs_soft: 6
+    vs_armor: 0
+    ammo: 600
+    platform_accuracy: 0.9
+
+  spike_sr:
+    name: "Spike-SR"
+    type: atgm
+    range_km: 1.5
+    range_moving_km: 0.0
+    suppressive_range_km: 1.5
+    rate_of_fire: 2
+    vs_soft: 5
+    vs_armor: 6
+    ammo: 2
+    platform_accuracy: 0.7
+
+  rifles_crew:
+    name: "Rifles (crew)"
+    type: rifle
+    range_km: 0.5
+    range_moving_km: 0.1
+    suppressive_range_km: 0.8
+    rate_of_fire: 80
+    vs_soft: 3
+    vs_armor: 0
+    ammo: 600
+    platform_accuracy: 0.7
+
+optics:
+  eyesight:
+    name: "Eyesight"
+    range_km: 2.0
+  binoculars_7x:
+    name: "Binoculars 7x50"
+    range_km: 3.0
+  binoculars_10x:
+    name: "Binoculars 10x50"
+    range_km: 3.0
+  kornet_thermal:
+    name: "Kornet thermal sight"
+    range_km: 5.0
+  commander_thermal:
+    name: "Commander thermal sight"
+    range_km: 4.0
+  commander_sight:
+    name: "Commander sight"
+    range_km: 3.0
+  binos_thermal:
+    name: "Binoculars + thermal monocular"
+    range_km: 3.0
+  binoculars:
+    name: "Binoculars"
+    range_km: 2.5
+
+comms:
+  motorola_hf:
+    name: "Motorola HF Radio"
+    range_km: 9.0
+  motorola_vhf:
+    name: "Motorola VHF Radio"
+    range_km: 6.0
+  harris_tac:
+    name: "Harris tactical radio"
+    range_km: 15.0
