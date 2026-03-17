@@ -96,6 +96,11 @@ var carousel_right_btn: Button
 var carousel_order: Array = []  # sorted unit list
 var carousel_index: int = 0
 
+# Context menu
+var context_menu: PopupMenu
+var context_menu_unit: Dictionary = {}
+var current_order_mode: Order.Type = Order.Type.MOVE  # MOVE, PATROL, or AMBUSH
+
 # HQ config (loaded from game.yaml)
 var hq_switching_cost: float = 15.0
 var hq_comms_order_buff: float = 0.8
@@ -618,6 +623,46 @@ func _setup_display_bar() -> void:
 	carousel_right_btn.add_theme_color_override("font_color", Color(0.7, 0.72, 0.65))
 	carousel_right_btn.pressed.connect(_carousel_next)
 	hbox.add_child(carousel_right_btn)
+
+	# Context menu for right-clicking units
+	context_menu = PopupMenu.new()
+	context_menu.add_item("Move (Cmd+L Click)", 0)
+	context_menu.add_item("Attack (Cmd+R Click)", 1)
+	context_menu.add_item("Patrol", 2)
+	context_menu.add_item("Ambush", 3)
+	context_menu.id_pressed.connect(_on_context_menu_selected)
+	add_child(context_menu)
+
+
+func _show_unit_context_menu(unit: Dictionary, screen_pos: Vector2) -> void:
+	# Select the unit first
+	var pos := Vector2i(unit["col"], unit["row"])
+	selected_hex = pos
+	selected_unit = unit
+	_calculate_los(unit)
+	_update_info_label()
+	queue_redraw()
+
+	context_menu_unit = unit
+	context_menu.position = Vector2i(int(screen_pos.x), int(screen_pos.y))
+	context_menu.popup()
+
+
+func _on_context_menu_selected(id: int) -> void:
+	if context_menu_unit.is_empty():
+		return
+	selected_unit = context_menu_unit
+	match id:
+		0:  # Move
+			current_order_mode = Order.Type.MOVE
+		1:  # Attack
+			current_order_mode = Order.Type.ATTACK
+		2:  # Patrol
+			current_order_mode = Order.Type.PATROL
+		3:  # Ambush
+			current_order_mode = Order.Type.AMBUSH
+	_update_info_label()
+	context_menu_unit = {}
 
 
 func _load_posture_configs() -> void:
@@ -1814,7 +1859,8 @@ func _update_info_label() -> void:
 	var posture_str := Order.posture_to_string(current_posture).to_upper()
 	var roe_str := Order.roe_to_string(current_roe).to_upper()
 	var pursuit_str := Order.pursuit_to_string(current_pursuit).to_upper()
-	info_label.text = "%s (1/2/3)  |  %s (QWER)  |  %s (ZXC)  |  Cmd+L: move  Cmd+R: attack" % [posture_str, roe_str, pursuit_str]
+	var mode_str := Order.type_to_string(current_order_mode).to_upper()
+	info_label.text = "%s  |  %s (1/2/3)  |  %s (QWER)  |  %s (ZXC)" % [mode_str, posture_str, roe_str, pursuit_str]
 
 	# Update unit carousel
 	_build_carousel_order()
@@ -1831,16 +1877,32 @@ func _update_info_label() -> void:
 		panel_elevation_label.text = "Elevation: %d" % elev
 		panel_speed_modifier_label.text = "Speed:     %d%%" % int(mcost * 100)
 
-		# Check for unit on this hex
-		var unit := _get_unit_at(selected_hex)
-		if not unit.is_empty():
-			var utype_code: String = unit["type_code"]
+		# Show selected unit's info (use selected_unit, not _get_unit_at, to support stacked selection)
+		if not selected_unit.is_empty():
+			var utype_code: String = selected_unit["type_code"]
 			var utype: Dictionary = unit_types.get(utype_code, {})
-			var order: Order = order_manager.get_order(unit.get("name", ""))
-			var supp_val: float = combat.get_suppression(unit.get("name", ""))
-			unit_panel.show_unit(unit, utype, order, game_clock.game_time_minutes, supp_val)
+			var order: Order = order_manager.get_order(selected_unit.get("name", ""))
+			var supp_val: float = combat.get_suppression(selected_unit.get("name", ""))
+			unit_panel.show_unit(selected_unit, utype, order, game_clock.game_time_minutes, supp_val)
+			# Update stacked unit carousel
+			var stacked: Array = []
+			for u in units:
+				if int(u["col"]) == selected_hex.x and int(u["row"]) == selected_hex.y:
+					if u.get("unit_status", "") != "DESTROYED":
+						stacked.append(u)
+			unit_panel.set_stacked_units(stacked, selected_unit.get("name", ""))
 		else:
-			unit_panel.hide_unit()
+			var unit := _get_unit_at(selected_hex)
+			if not unit.is_empty():
+				selected_unit = unit
+				_calculate_los(unit)
+				var utype_code: String = unit["type_code"]
+				var utype: Dictionary = unit_types.get(utype_code, {})
+				var order: Order = order_manager.get_order(unit.get("name", ""))
+				var supp_val: float = combat.get_suppression(unit.get("name", ""))
+				unit_panel.show_unit(unit, utype, order, game_clock.game_time_minutes, supp_val)
+			else:
+				unit_panel.hide_unit()
 
 		hex_panel.visible = true
 	else:
@@ -1864,8 +1926,18 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif mb.button_index == MOUSE_BUTTON_RIGHT:
 			if mb.pressed and mb.is_command_or_control_pressed():
 				_handle_attack_order(mb.position)
+			elif mb.pressed:
+				# Check if right-clicking on a friendly unit for context menu
+				var world_pos := mb.position / zoom_level + camera_offset / zoom_level
+				var hex_coord: Vector2i = hex_grid.pixel_to_hex(world_pos)
+				var clicked_unit := _get_unit_at(hex_coord)
+				if not clicked_unit.is_empty() and clicked_unit.get("side", "player") == "player" \
+						and clicked_unit.get("unit_status", "") != "DESTROYED":
+					_show_unit_context_menu(clicked_unit, mb.position)
+				else:
+					is_panning = true
 			else:
-				is_panning = mb.pressed
+				is_panning = false
 		elif mb.button_index == MOUSE_BUTTON_MIDDLE:
 			is_panning = mb.pressed
 		elif mb.button_index == MOUSE_BUTTON_WHEEL_UP and mb.pressed:
@@ -1980,8 +2052,17 @@ func _handle_move_order(screen_pos: Vector2) -> void:
 		wp_posture = Order.Posture.NORMAL
 		wp_roe = Order.ROE.HOLD_FIRE
 		wp_pursuit = Order.Pursuit.HOLD
+	# Use current order mode (MOVE, PATROL, or AMBUSH)
+	var order_type := current_order_mode
+	if order_type == Order.Type.ATTACK:
+		order_type = Order.Type.MOVE  # Attack uses Cmd+Right, not Cmd+Left
+	# Ambush defaults to cautious + hold fire for the approach
+	if order_type == Order.Type.AMBUSH:
+		wp_posture = Order.Posture.CAUTIOUS
+		wp_roe = Order.ROE.HOLD_FIRE
+
 	var order := order_manager.issue_order(
-		selected_unit, utype, Order.Type.MOVE, target,
+		selected_unit, utype, order_type, target,
 		game_clock.game_time_minutes, wp_posture, wp_roe, hq_mod, wp_pursuit)
 
 	_update_info_label()

@@ -22,7 +22,7 @@ unit_types:
 
     optics:
       name: "Eyesight"
-      range_km: 2.0
+      range_km: 1.5
 
     # Weapon systems
     # range_km: effective range when stationary
@@ -73,7 +73,7 @@ unit_types:
 
     optics:
       name: "Binoculars 10x50"
-      range_km: 3.0
+      range_km: 2.5
 
     comms:
       name: "Motorola HF Radio"
@@ -112,7 +112,7 @@ unit_types:
 
     optics:
       name: "Binoculars 7x50"
-      range_km: 3.0
+      range_km: 2.5
 
     comms:
       name: "Motorola VHF Radio"

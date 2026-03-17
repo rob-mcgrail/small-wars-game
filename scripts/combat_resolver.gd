@@ -103,6 +103,12 @@ func resolve_unit_combat(unit: Dictionary, minutes: float) -> void:
 		return
 
 	var order: Order = order_manager.get_order(uname)
+
+	# Ambush logic: override normal ROE when ambush is set
+	if order != null and order.type == Order.Type.AMBUSH and order.ambush_set:
+		_handle_ambush(unit, order, minutes)
+		return
+
 	var roe: Order.ROE = get_effective_roe(unit, order)
 
 	if roe == Order.ROE.HOLD_FIRE:
@@ -319,6 +325,235 @@ func resolve_unit_combat(unit: Dictionary, minutes: float) -> void:
 			var w_name: String = w.get("name", "?")
 			combat.log_event("%s fires %s: %d rounds, %d hits on %s" % [
 				uname, w_name, rounds, result["hits"], best_target.get("name", "?")])
+
+	unit["current_ammo"] = ammo_arr
+	if fired_any:
+		check_morale(unit)
+
+
+func _handle_ambush(unit: Dictionary, order: Order, minutes: float) -> void:
+	var targets: Array = find_targets_in_range(unit)
+	if targets.is_empty():
+		return  # No targets, keep waiting
+
+	var utype: Dictionary = unit_types.get(unit.get("type_code", ""), {})
+	var unit_pos := Vector2i(unit["col"], unit["row"])
+
+	# Find best weapon effective range in hexes
+	var weapons = utype.get("weapons", [])
+	if not (weapons is Array):
+		return
+	var best_effective_range: float = 0.0
+	for w in weapons:
+		var r: float = float(w.get("range_km", 0))
+		if r > best_effective_range:
+			best_effective_range = r
+	var effective_hexes: int = int(best_effective_range / 0.5)
+
+	if not order.ambush_triggered:
+		# Score the engagement - wait for optimal moment
+		var trigger_score: float = 0.0
+		var closest_enemy: int = 999
+		for target in targets:
+			if target.get("unit_status", "") == "DESTROYED":
+				continue
+			var t_pos := Vector2i(target["col"], target["row"])
+			var dist: int = hex_grid.hex_distance(unit_pos, t_pos)
+			if dist < closest_enemy:
+				closest_enemy = dist
+			# Higher score for enemies in effective range (not just spotting range)
+			if dist <= effective_hexes:
+				trigger_score += 3.0 - float(dist) * 0.5  # closer = better
+			else:
+				trigger_score += 0.5  # in spotting range but not effective
+
+		# Trigger conditions:
+		# - Any enemy within 1 hex (they'll spot us for sure)
+		# - Score >= 3.0 (at least one enemy at good range)
+		if closest_enemy <= 1 or trigger_score >= 3.0:
+			order.ambush_triggered = true
+			order.ambush_trigger_time = game_clock.game_time_minutes
+			combat.log_event("%s AMBUSH triggered!" % unit.get("name", "?"))
+		else:
+			return  # Not yet, keep waiting
+
+	# Ambush has triggered - fight with bonuses
+	# Terrain-based ambush quality multiplier
+	var terrain_code: String = terrain_grid[unit_pos.y][unit_pos.x]
+	var ambush_concealment_bonus: float = 1.0
+	var ambush_accuracy_bonus: float = 1.0
+	match terrain_code:
+		"W":  # Woods - excellent ambush terrain
+			ambush_concealment_bonus = 2.0
+			ambush_accuracy_bonus = 1.8
+		"T":  # Town - good ambush terrain
+			ambush_concealment_bonus = 1.8
+			ambush_accuracy_bonus = 1.6
+		"C":  # City - good ambush terrain
+			ambush_concealment_bonus = 1.8
+			ambush_accuracy_bonus = 1.6
+		"O":  # Open - poor ambush, slight bonus from being dug in
+			ambush_concealment_bonus = 1.2
+			ambush_accuracy_bonus = 1.2
+		"S":  # Street - minimal ambush
+			ambush_concealment_bonus = 1.1
+			ambush_accuracy_bonus = 1.1
+
+	# First volley bonus decays over 3 minutes after trigger
+	var time_since_trigger: float = game_clock.game_time_minutes - order.ambush_trigger_time
+	var first_volley_bonus: float = 1.0
+	if time_since_trigger < 3.0:
+		# Surprise multiplier: 2.5x at trigger, fading to 1.0 over 3 minutes
+		first_volley_bonus = lerpf(2.5, 1.0, clampf(time_since_trigger / 3.0, 0.0, 1.0))
+
+	var total_accuracy_mod: float = ambush_accuracy_bonus * first_volley_bonus
+
+	# Override ROE to fire at will during ambush
+	# Use the normal combat resolution but with boosted accuracy
+	var utype_code: String = unit.get("type_code", "")
+	var ammo_arr: Array = unit.get("current_ammo", [])
+	var is_moving: bool = false
+	var crew_ratio: float = 1.0
+	var max_crew: int = int(utype.get("crew", 4))
+	var cur_crew: int = int(unit.get("current_crew", max_crew))
+	if max_crew > 0:
+		crew_ratio = clampf(float(cur_crew) / float(max_crew), 0.0, 1.0)
+	if cur_crew <= 0:
+		return
+
+	var roe_mult: float = ROE_RATE_FIRE_AT_WILL
+	var fired_any: bool = false
+
+	for wi in range(weapons.size()):
+		if wi >= ammo_arr.size():
+			continue
+		var current_ammo: int = int(ammo_arr[wi])
+		if current_ammo <= 0:
+			continue
+
+		var w: Dictionary = weapons[wi]
+		var w_range_km: float = float(w.get("range_km", 0))
+		var w_supp_range_km: float = float(w.get("suppressive_range_km", w_range_km))
+		if _is_night() and not _unit_has_night_vision(unit):
+			w_range_km *= night_range_modifier
+			w_supp_range_km *= night_range_modifier
+		var w_max_range_hexes: float = w_supp_range_km / 0.5
+		var w_effective_range_hexes: float = w_range_km / 0.5
+
+		var best_target: Dictionary = {}
+		var best_dist: int = 999
+		for target in targets:
+			if target.get("unit_status", "") == "DESTROYED":
+				continue
+			var t_pos := Vector2i(target["col"], target["row"])
+			var dist: int = hex_grid.hex_distance(unit_pos, t_pos)
+			if float(dist) <= w_max_range_hexes and dist < best_dist:
+				best_dist = dist
+				best_target = target
+
+		if best_target.is_empty():
+			continue
+
+		var rof: float = float(w.get("rate_of_fire", 600))
+		var max_ammo: int = int(w.get("ammo", 0))
+		var ammo_pct: float = float(current_ammo) / maxf(1.0, float(max_ammo))
+		var conservation: float = 1.0
+		if ammo_pct < 0.5:
+			conservation = clampf(ammo_pct / 0.5, 0.2, 1.0)
+		var rounds_f: float = rof * roe_mult * minutes * crew_ratio * conservation
+		var rounds: int = int(rounds_f)
+		if randf() < (rounds_f - float(rounds)):
+			rounds += 1
+		rounds = mini(rounds, current_ammo)
+		if rounds <= 0:
+			continue
+
+		var target_pos := Vector2i(best_target["col"], best_target["row"])
+		var target_terrain: String = terrain_grid[target_pos.y][target_pos.x]
+		var target_type_code: String = best_target.get("type_code", "")
+		var target_type: Dictionary = unit_types.get(target_type_code, {})
+		var target_armor: int = int(target_type.get("armor", 0))
+		var target_order: Order = order_manager.get_order(best_target.get("name", ""))
+		var target_moving: bool = target_order != null and target_order.status == Order.Status.EXECUTING
+
+		var is_suppressive: bool = float(best_dist) > w_effective_range_hexes
+		var shooter_elev: int = elevation_grid[unit_pos.y][unit_pos.x]
+		var target_elev_val: int = elevation_grid[target_pos.y][target_pos.x]
+		var elev_diff: int = shooter_elev - target_elev_val
+
+		var result: Dictionary = combat.resolve_combat(
+			unit, best_target, utype, target_type,
+			wi, rounds, best_dist,
+			is_moving, target_moving,
+			target_terrain, target_armor, is_suppressive, elev_diff,
+			total_accuracy_mod)
+
+		ammo_arr[wi] = current_ammo - rounds
+		fired_any = true
+
+		if result["hits"] > 0 or result["suppression_added"] > 0:
+			var t_name: String = best_target.get("name", "?")
+			var supp_mod: float = _get_hq_suppression_modifier(best_target)
+			combat.apply_suppression(t_name, result["suppression_added"] * supp_mod)
+
+		if result["crew_killed"] > 0:
+			var t_crew: int = int(best_target.get("current_crew", 4))
+			best_target["current_crew"] = maxi(0, t_crew - result["crew_killed"])
+
+		if result["vehicle_damage"] > 0.0:
+			var cur_dmg: float = float(best_target.get("vehicle_damage", 0.0))
+			best_target["vehicle_damage"] = cur_dmg + result["vehicle_damage"]
+
+		var mob_result: float = float(result.get("mobility_damage", 0.0))
+		if mob_result > 0.0:
+			var cur_mob: float = float(best_target.get("mobility_damage", 0.0))
+			best_target["mobility_damage"] = clampf(cur_mob + mob_result, 0.0, 1.5)
+
+		if result.get("weapon_disabled", false):
+			var t_ammo: Array = best_target.get("current_ammo", [])
+			var valid_indices: Array[int] = []
+			for ai in range(t_ammo.size()):
+				if int(t_ammo[ai]) > 0:
+					valid_indices.append(ai)
+			if not valid_indices.is_empty():
+				var disable_idx: int = valid_indices[randi() % valid_indices.size()]
+				t_ammo[disable_idx] = 0
+				best_target["current_ammo"] = t_ammo
+
+		# Check destruction/abandonment
+		var t_crew_left: int = int(best_target.get("current_crew", 0))
+		var t_dmg: float = float(best_target.get("vehicle_damage", 0.0))
+		var t_mob_dmg: float = float(best_target.get("mobility_damage", 0.0))
+		if t_crew_left <= 0 or t_dmg >= 1.0:
+			if best_target.get("unit_status", "") != "DESTROYED":
+				best_target["unit_status"] = "DESTROYED"
+				order_manager.cancel_order(best_target.get("name", ""))
+				combat.log_event("%s DESTROYED by %s (AMBUSH)" % [best_target.get("name", "?"), unit.get("name", "?")])
+				on_unit_destroyed(best_target)
+		elif t_crew_left > 0:
+			var t_status: String = best_target.get("unit_status", "")
+			var abandon_vdmg: float = 0.7
+			var abandon_mob: float = 0.8
+			if t_status == "ROUTING":
+				abandon_vdmg = 0.35
+				abandon_mob = 0.4
+			elif t_status == "BROKEN":
+				abandon_vdmg = 0.5
+				abandon_mob = 0.6
+			if (t_dmg >= abandon_vdmg or t_mob_dmg >= abandon_mob) and t_status != "DESTROYED":
+				abandon_vehicle(best_target)
+
+		if rounds > 0:
+			fire_effects.append({
+				"from": Vector2i(unit["col"], unit["row"]),
+				"to": target_pos,
+				"time_remaining": 2.0,
+				"hit": result["hits"] > 0,
+			})
+		if result["hits"] > 0:
+			var w_name: String = w.get("name", "?")
+			combat.log_event("%s AMBUSH fires %s: %d rounds, %d hits on %s" % [
+				unit.get("name", "?"), w_name, rounds, result["hits"], best_target.get("name", "?")])
 
 	unit["current_ammo"] = ammo_arr
 	if fired_any:

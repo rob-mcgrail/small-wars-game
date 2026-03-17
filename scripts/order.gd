@@ -1,7 +1,7 @@
 class_name Order
 extends RefCounted
 
-enum Type { MOVE, ATTACK, DEFEND, WITHDRAW, HOLD }
+enum Type { MOVE, ATTACK, DEFEND, WITHDRAW, HOLD, PATROL, AMBUSH }
 enum Status { FORMULATING, PREPARING, EXECUTING, COMPLETE, COUNTERMANDED }
 enum Posture { FAST, NORMAL, CAUTIOUS }
 enum ROE { HOLD_FIRE, RETURN_FIRE, FIRE_AT_WILL, HALT_AND_ENGAGE }
@@ -65,6 +65,11 @@ var was_countermanded: bool = false
 
 # Attack target hex (separate from waypoints which define the route to the firing position)
 var attack_target: Vector2i = Vector2i(-1, -1)
+
+# Ambush state
+var ambush_set: bool = false  # unit has reached ambush position and dug in
+var ambush_triggered: bool = false  # ambush has fired, first volley spent
+var ambush_trigger_time: float = 0.0  # game time when ambush was triggered
 
 # The unit this order is for
 var unit_name: String = ""
@@ -156,6 +161,8 @@ static func type_to_string(t: Type) -> String:
 		Type.DEFEND: return "defend"
 		Type.WITHDRAW: return "withdraw"
 		Type.HOLD: return "hold"
+		Type.PATROL: return "patrol"
+		Type.AMBUSH: return "ambush"
 	return "unknown"
 
 
@@ -166,6 +173,8 @@ static func type_from_string(s: String) -> Type:
 		"defend": return Type.DEFEND
 		"withdraw": return Type.WITHDRAW
 		"hold": return Type.HOLD
+		"patrol": return Type.PATROL
+		"ambush": return Type.AMBUSH
 	return Type.HOLD
 
 

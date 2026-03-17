@@ -84,8 +84,20 @@ func move_units(minutes: float) -> void:
 			if current == target:
 				# Reached current waypoint - advance to next
 				if not order.advance_waypoint():
-					# ATTACK orders persist at firing position - unit holds and watches
+					# PATROL: loop back to first waypoint
+					if order.type == Order.Type.PATROL:
+						order.current_waypoint_index = 0
+						posture_str = Order.posture_to_string(order.posture)
+						posture_cfg = posture_configs.get(posture_str, {})
+						posture_speed_mod = posture_cfg.get("speed_modifier", 1.0)
+						unit["move_accumulator"] = 0.0
+						break
+					# ATTACK/AMBUSH: persist at position
 					if order.type == Order.Type.ATTACK:
+						unit["move_accumulator"] = 0.0
+						break
+					if order.type == Order.Type.AMBUSH:
+						order.ambush_set = true
 						unit["move_accumulator"] = 0.0
 						break
 					order.status = Order.Status.COMPLETE
