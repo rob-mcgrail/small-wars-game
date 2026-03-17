@@ -34,11 +34,20 @@ var pursuit_container: HBoxContainer
 var pursuit_buttons: Array[Button] = []
 var waypoint_labels: Array[Control] = []
 
+# Stacked unit carousel
+var stack_container: HBoxContainer
+var stack_left_btn: Button
+var stack_label: Label
+var stack_right_btn: Button
+var stacked_units: Array = []
+var stack_index: int = 0
+
 # Weapons section
 signal order_cleared(unit_name: String)
 signal posture_changed(unit_name: String, posture: Order.Posture)
 signal roe_changed(unit_name: String, roe: Order.ROE)
 signal pursuit_changed(unit_name: String, pursuit: Order.Pursuit)
+signal stack_unit_selected(unit_name: String)
 
 var _current_unit_name: String = ""
 var _is_orders_phase: bool = true
@@ -79,7 +88,7 @@ func _ready() -> void:
 	var anchor := Control.new()
 	anchor.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
 	anchor.offset_left = 6
-	anchor.offset_top = -600
+	anchor.offset_top = -480
 	anchor.offset_right = 300
 	anchor.offset_bottom = -162
 	anchor.grow_horizontal = Control.GROW_DIRECTION_END
@@ -304,6 +313,40 @@ func _ready() -> void:
 	vbox.add_child(weapons_header)
 	weapons_sep = _make_sep()
 	vbox.add_child(weapons_sep)
+
+	# Stacked unit carousel (shown when multiple units on same hex)
+	vbox.add_child(_make_sep())
+	stack_container = HBoxContainer.new()
+	stack_container.add_theme_constant_override("separation", 4)
+	stack_container.alignment = BoxContainer.ALIGNMENT_CENTER
+	vbox.add_child(stack_container)
+
+	stack_left_btn = Button.new()
+	stack_left_btn.text = "<"
+	stack_left_btn.custom_minimum_size = Vector2(24, 24)
+	stack_left_btn.add_theme_font_size_override("font_size", 12)
+	var stk_style := StyleBoxFlat.new()
+	stk_style.bg_color = Color(0.15, 0.15, 0.15, 0.0)
+	stack_left_btn.add_theme_stylebox_override("normal", stk_style)
+	stack_left_btn.add_theme_color_override("font_color", Color(0.7, 0.72, 0.65))
+	stack_left_btn.pressed.connect(_stack_prev)
+	stack_container.add_child(stack_left_btn)
+
+	stack_label = _make_label()
+	stack_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	stack_label.custom_minimum_size = Vector2(140, 0)
+	stack_container.add_child(stack_label)
+
+	stack_right_btn = Button.new()
+	stack_right_btn.text = ">"
+	stack_right_btn.custom_minimum_size = Vector2(24, 24)
+	stack_right_btn.add_theme_font_size_override("font_size", 12)
+	stack_right_btn.add_theme_stylebox_override("normal", stk_style.duplicate())
+	stack_right_btn.add_theme_color_override("font_color", Color(0.7, 0.72, 0.65))
+	stack_right_btn.pressed.connect(_stack_next)
+	stack_container.add_child(stack_right_btn)
+
+	stack_container.visible = false
 
 	panel.visible = false
 
@@ -660,6 +703,45 @@ func _clear_waypoint_labels() -> void:
 func _on_clear_order_pressed() -> void:
 	if _current_unit_name != "":
 		order_cleared.emit(_current_unit_name)
+
+
+func set_stacked_units(units_on_hex: Array, current_name: String) -> void:
+	stacked_units = units_on_hex
+	if stacked_units.size() <= 1:
+		stack_container.visible = false
+		return
+	stack_container.visible = true
+	# Find current index
+	stack_index = 0
+	for i in range(stacked_units.size()):
+		if stacked_units[i].get("name", "") == current_name:
+			stack_index = i
+			break
+	_update_stack_label()
+
+
+func _update_stack_label() -> void:
+	if stack_index >= 0 and stack_index < stacked_units.size():
+		var u: Dictionary = stacked_units[stack_index]
+		stack_label.text = "%s (%d/%d)" % [u.get("name", "?"), stack_index + 1, stacked_units.size()]
+
+
+func _stack_prev() -> void:
+	if stacked_units.is_empty():
+		return
+	stack_index = (stack_index - 1) % stacked_units.size()
+	if stack_index < 0:
+		stack_index = stacked_units.size() - 1
+	_update_stack_label()
+	stack_unit_selected.emit(stacked_units[stack_index].get("name", ""))
+
+
+func _stack_next() -> void:
+	if stacked_units.is_empty():
+		return
+	stack_index = (stack_index + 1) % stacked_units.size()
+	_update_stack_label()
+	stack_unit_selected.emit(stacked_units[stack_index].get("name", ""))
 
 
 func _on_pursuit_pressed(pursuit_name: String) -> void:

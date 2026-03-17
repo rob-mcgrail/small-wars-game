@@ -48,9 +48,6 @@ const ZOOM_MIN := 0.2
 const ZOOM_MAX := 3.0
 const ZOOM_STEP := 0.15
 
-# Edge scrolling
-const EDGE_SCROLL_MARGIN := 20.0
-const EDGE_SCROLL_SPEED := 300.0
 
 # ROE multipliers on weapon's rate_of_fire
 # e.g. a 600 RPM DShK on Fire at Will fires at 3.5% = ~20 RPM (realistic burst fire)
@@ -91,6 +88,13 @@ var show_units := true
 var show_elevation := false
 var show_move_cost := false
 var display_bar: CanvasLayer
+
+# Unit carousel
+var carousel_label: Label
+var carousel_left_btn: Button
+var carousel_right_btn: Button
+var carousel_order: Array = []  # sorted unit list
+var carousel_index: int = 0
 
 # HQ config (loaded from game.yaml)
 var hq_switching_cost: float = 15.0
@@ -490,6 +494,7 @@ func _setup_unit_panel() -> void:
 	unit_panel.posture_changed.connect(_on_posture_changed)
 	unit_panel.roe_changed.connect(_on_roe_changed)
 	unit_panel.pursuit_changed.connect(_on_pursuit_changed)
+	unit_panel.stack_unit_selected.connect(_on_stack_unit_selected)
 
 
 func _setup_display_bar() -> void:
@@ -578,6 +583,41 @@ func _setup_display_bar() -> void:
 	info_label.add_theme_font_size_override("font_size", 12)
 	info_label.add_theme_color_override("font_color", Color(0.6, 0.62, 0.55))
 	hbox.add_child(info_label)
+
+	# Separator before carousel
+	var carousel_sep := VSeparator.new()
+	carousel_sep.add_theme_constant_override("separation", 8)
+	hbox.add_child(carousel_sep)
+
+	# Unit carousel: < Name >
+	carousel_left_btn = Button.new()
+	carousel_left_btn.text = "<"
+	carousel_left_btn.custom_minimum_size = Vector2(28, 0)
+	carousel_left_btn.add_theme_font_size_override("font_size", 14)
+	var cb_style := StyleBoxFlat.new()
+	cb_style.bg_color = Color(0.15, 0.15, 0.15, 0.0)
+	carousel_left_btn.add_theme_stylebox_override("normal", cb_style)
+	carousel_left_btn.add_theme_color_override("font_color", Color(0.7, 0.72, 0.65))
+	carousel_left_btn.pressed.connect(_carousel_prev)
+	hbox.add_child(carousel_left_btn)
+
+	carousel_label = Label.new()
+	carousel_label.custom_minimum_size = Vector2(160, 0)
+	carousel_label.add_theme_font_size_override("font_size", 13)
+	carousel_label.add_theme_color_override("font_color", Color(0.85, 0.87, 0.8))
+	carousel_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	carousel_label.mouse_filter = Control.MOUSE_FILTER_STOP
+	carousel_label.gui_input.connect(_on_carousel_label_input)
+	hbox.add_child(carousel_label)
+
+	carousel_right_btn = Button.new()
+	carousel_right_btn.text = ">"
+	carousel_right_btn.custom_minimum_size = Vector2(28, 0)
+	carousel_right_btn.add_theme_font_size_override("font_size", 14)
+	carousel_right_btn.add_theme_stylebox_override("normal", cb_style.duplicate())
+	carousel_right_btn.add_theme_color_override("font_color", Color(0.7, 0.72, 0.65))
+	carousel_right_btn.pressed.connect(_carousel_next)
+	hbox.add_child(carousel_right_btn)
 
 
 func _load_posture_configs() -> void:
@@ -694,6 +734,145 @@ func _on_phase_changed(phase: String) -> void:
 			_interrupted = false
 			return
 		_check_auto_continue()
+
+
+func _build_carousel_order() -> void:
+	carousel_order.clear()
+	var player_hq1: Array = []  # battalion HQs
+	var player_hq2: Array = []  # company HQs
+	var player_by_hq: Dictionary = {}  # hq_name -> Array of units sorted by distance
+	var player_no_hq: Array = []
+	var dead_visible: Array = []
+	var enemy_visible: Array = []
+
+	for unit in units:
+		var side: String = unit.get("side", "player")
+		var status: String = unit.get("unit_status", "")
+
+		if side == "enemy":
+			var uname: String = unit.get("name", "")
+			if uname in spotted_enemies and status != "DESTROYED":
+				enemy_visible.append(unit)
+			continue
+
+		if status == "DESTROYED":
+			var pos := Vector2i(unit["col"], unit["row"])
+			if pos in death_markers:
+				dead_visible.append(unit)
+			continue
+
+		var utype: Dictionary = unit_types.get(unit.get("type_code", ""), {})
+		if utype.get("is_hq", false):
+			if int(utype.get("hq_level", 0)) == 1:
+				player_hq1.append(unit)
+			else:
+				player_hq2.append(unit)
+		else:
+			var hq_name: String = unit.get("assigned_hq", "")
+			if hq_name != "":
+				if hq_name not in player_by_hq:
+					player_by_hq[hq_name] = []
+				player_by_hq[hq_name].append(unit)
+			else:
+				player_no_hq.append(unit)
+
+	# Build order: BHQs, then for each SHQ: the SHQ followed by its units
+	for hq in player_hq1:
+		carousel_order.append(hq)
+	for hq in player_hq2:
+		carousel_order.append(hq)
+		var hq_name: String = hq.get("name", "")
+		if hq_name in player_by_hq:
+			# Sort by distance from HQ
+			var sub_units: Array = player_by_hq[hq_name]
+			sub_units.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+				var da: int = hex_grid.hex_distance(Vector2i(a["col"], a["row"]), Vector2i(hq["col"], hq["row"]))
+				var db: int = hex_grid.hex_distance(Vector2i(b["col"], b["row"]), Vector2i(hq["col"], hq["row"]))
+				return da < db)
+			for u in sub_units:
+				carousel_order.append(u)
+	for u in player_no_hq:
+		carousel_order.append(u)
+	for u in dead_visible:
+		carousel_order.append(u)
+	for u in enemy_visible:
+		carousel_order.append(u)
+
+
+func _update_carousel() -> void:
+	if carousel_order.is_empty():
+		carousel_label.text = "No units"
+		return
+
+	# Sync index to selected unit
+	if not selected_unit.is_empty():
+		var sel_name: String = selected_unit.get("name", "")
+		for i in range(carousel_order.size()):
+			if carousel_order[i].get("name", "") == sel_name:
+				carousel_index = i
+				break
+
+	carousel_index = clampi(carousel_index, 0, carousel_order.size() - 1)
+	var unit: Dictionary = carousel_order[carousel_index]
+	var uname: String = unit.get("name", "?")
+	var status: String = unit.get("unit_status", "")
+	var side: String = unit.get("side", "player")
+
+	var display := uname
+	if status == "DESTROYED":
+		display += " [X]"
+	elif status == "ROUTING":
+		display += " [!]"
+	elif status == "BROKEN":
+		display += " [!]"
+
+	carousel_label.text = display
+	if side == "enemy":
+		carousel_label.add_theme_color_override("font_color", Color(0.9, 0.35, 0.25))
+	elif status == "DESTROYED":
+		carousel_label.add_theme_color_override("font_color", Color(0.5, 0.45, 0.4))
+	else:
+		carousel_label.add_theme_color_override("font_color", Color(0.85, 0.87, 0.8))
+
+
+func _carousel_prev() -> void:
+	if carousel_order.is_empty():
+		return
+	carousel_index = (carousel_index - 1) % carousel_order.size()
+	if carousel_index < 0:
+		carousel_index = carousel_order.size() - 1
+	_carousel_select_current()
+
+
+func _carousel_next() -> void:
+	if carousel_order.is_empty():
+		return
+	carousel_index = (carousel_index + 1) % carousel_order.size()
+	_carousel_select_current()
+
+
+func _carousel_select_current() -> void:
+	if carousel_index >= 0 and carousel_index < carousel_order.size():
+		var unit: Dictionary = carousel_order[carousel_index]
+		_select_and_center_unit(unit)
+		_update_carousel()
+
+
+func _on_carousel_label_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		if mb.button_index == MOUSE_BUTTON_LEFT and mb.pressed:
+			_carousel_select_current()
+
+
+func _on_stack_unit_selected(unit_name: String) -> void:
+	for unit in units:
+		if unit.get("name", "") == unit_name:
+			selected_unit = unit
+			_calculate_los(unit)
+			_update_info_label()
+			queue_redraw()
+			break
 
 
 func _on_unit_moved(unit_name: String) -> void:
@@ -978,28 +1157,6 @@ func _make_panel_label() -> Label:
 
 
 func _process(delta: float) -> void:
-	var viewport_size := get_viewport_rect().size
-	var mouse_pos := get_viewport().get_mouse_position()
-
-	# Edge scrolling
-	var scroll_dir := Vector2.ZERO
-	var in_window := mouse_pos.x >= 0 and mouse_pos.y >= 0 \
-		and mouse_pos.x <= viewport_size.x and mouse_pos.y <= viewport_size.y
-
-	if in_window:
-		if mouse_pos.x < EDGE_SCROLL_MARGIN:
-			scroll_dir.x = -1
-		elif mouse_pos.x > viewport_size.x - EDGE_SCROLL_MARGIN:
-			scroll_dir.x = 1
-		if mouse_pos.y < EDGE_SCROLL_MARGIN:
-			scroll_dir.y = -1
-		elif mouse_pos.y > viewport_size.y - EDGE_SCROLL_MARGIN:
-			scroll_dir.y = 1
-
-	if scroll_dir != Vector2.ZERO:
-		camera_offset += scroll_dir * EDGE_SCROLL_SPEED * delta / zoom_level
-		_clamp_camera()
-		queue_redraw()
 
 	# Decay fire effects (real time, not game time)
 	var effects_to_remove: Array[int] = []
@@ -1309,21 +1466,51 @@ func _draw() -> void:
 
 	# Draw units on top
 	if show_units:
+		# Count visible units per hex for stacking offset
+		var hex_unit_index: Dictionary = {}  # Vector2i -> int (count so far)
+		var hex_unit_total: Dictionary = {}  # Vector2i -> int (total)
+		var drawable_units: Array = []
+		var selected_draw: Dictionary = {}  # draw selected unit last (on top)
+
 		for unit in units:
-			# Don't draw destroyed units - death marker handles their visual
 			if unit.get("unit_status", "") == "DESTROYED":
 				continue
 			var unit_side: String = unit.get("side", "player")
-			# Fog of war: skip enemy units that aren't currently spotted
 			if unit_side == "enemy":
 				var uname: String = unit.get("name", "")
 				if uname not in spotted_enemies:
 					continue
+			var pos := Vector2i(unit["col"], unit["row"])
+			if not pos in hex_unit_total:
+				hex_unit_total[pos] = 0
+			hex_unit_total[pos] = int(hex_unit_total[pos]) + 1
+			if not selected_unit.is_empty() and unit.get("name", "") == selected_unit.get("name", ""):
+				selected_draw = unit
+			else:
+				drawable_units.append(unit)
+
+		# Draw non-selected units first, selected on top
+		if not selected_draw.is_empty():
+			drawable_units.append(selected_draw)
+
+		for unit in drawable_units:
 			var uc: int = unit["col"]
 			var ur: int = unit["row"]
 			if uc >= min_col and uc <= max_col and ur >= min_row and ur <= max_row:
+				var pos := Vector2i(uc, ur)
 				var center : Vector2 = (hex_grid.hex_to_pixel(uc, ur) - camera_offset / zoom_level) * zoom_level
+				# Stack offset
+				var total: int = int(hex_unit_total.get(pos, 1))
+				if total > 1:
+					if not pos in hex_unit_index:
+						hex_unit_index[pos] = 0
+					var idx: int = int(hex_unit_index[pos])
+					var offset_x: float = float(idx) * scaled_size * 0.15
+					var offset_y: float = float(idx) * scaled_size * -0.1
+					center += Vector2(offset_x, offset_y)
+					hex_unit_index[pos] = idx + 1
 				var type_code: String = unit["type_code"]
+				var unit_side: String = unit.get("side", "player")
 				if type_code in unit_types:
 					_draw_unit_counter(center, scaled_size, unit_types[type_code], unit["name"], unit_side)
 
@@ -1554,6 +1741,13 @@ func _update_selected_unit() -> void:
 	los_visible.clear()
 	if not selected_unit.is_empty():
 		_calculate_los(selected_unit)
+		# Find stacked units on same hex
+		var stacked: Array = []
+		for u in units:
+			if int(u["col"]) == selected_hex.x and int(u["row"]) == selected_hex.y:
+				if u.get("unit_status", "") != "DESTROYED":
+					stacked.append(u)
+		unit_panel.set_stacked_units(stacked, selected_unit.get("name", ""))
 
 
 func _calculate_los(unit: Dictionary) -> void:
@@ -1587,6 +1781,10 @@ func _update_info_label() -> void:
 	var roe_str := Order.roe_to_string(current_roe).to_upper()
 	var pursuit_str := Order.pursuit_to_string(current_pursuit).to_upper()
 	info_label.text = "%s (1/2/3)  |  %s (QWER)  |  %s (ZXC)  |  Cmd+Click: waypoint" % [posture_str, roe_str, pursuit_str]
+
+	# Update unit carousel
+	_build_carousel_order()
+	_update_carousel()
 
 	if selected_hex != Vector2i(-1, -1) and selected_hex.y < terrain_grid.size() and selected_hex.x < terrain_grid[selected_hex.y].size():
 		var code: String = terrain_grid[selected_hex.y][selected_hex.x]

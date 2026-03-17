@@ -134,28 +134,43 @@ func move_units(minutes: float) -> void:
 				unit["move_accumulator"] = 0.0
 				break
 
-			# Check hex occupancy
-			var hex_occupied: bool = false
-			var occupied_by_enemy: bool = false
+			# Check hex capacity (2 vehicles + 4 infantry max, no enemies)
+			var unit_side: String = unit.get("side", "player")
+			var unit_is_infantry: bool = unit.get("type_code", "") == "INF"
+			var has_enemy: bool = false
+			var friendly_vehicles: int = 0
+			var friendly_infantry: int = 0
 			for other in units:
 				if other == unit:
 					continue
 				if other.get("unit_status", "") == "DESTROYED":
 					continue
-				if int(other["col"]) == next_hex.x and int(other["row"]) == next_hex.y:
-					hex_occupied = true
-					if other.get("side", "player") != unit.get("side", "player"):
-						occupied_by_enemy = true
+				if int(other["col"]) != next_hex.x or int(other["row"]) != next_hex.y:
+					continue
+				if other.get("side", "player") != unit_side:
+					has_enemy = true
 					break
-			# Never enter enemy-occupied hex
-			if occupied_by_enemy:
+				if other.get("type_code", "") == "INF":
+					friendly_infantry += 1
+				else:
+					friendly_vehicles += 1
+			if has_enemy:
 				unit["move_accumulator"] = 0.0
 				break
-			# Can pass through friendly hexes but can't stop there
-			if hex_occupied and next_hex == target:
-				# Destination is occupied - stop one hex short
-				unit["move_accumulator"] = 0.0
-				break
+			var at_capacity: bool = false
+			if unit_is_infantry and friendly_infantry >= 4:
+				at_capacity = true
+			elif not unit_is_infantry and friendly_vehicles >= 2:
+				at_capacity = true
+			if at_capacity:
+				# Can't stop here - if this is destination, stop short
+				if next_hex == target:
+					unit["move_accumulator"] = 0.0
+					break
+				# If just passing through but out of movement, stop short
+				if float(unit.get("move_accumulator", 0.0)) < 2.0:
+					unit["move_accumulator"] = 0.0
+					break
 
 			unit["col"] = next_hex.x
 			unit["row"] = next_hex.y
