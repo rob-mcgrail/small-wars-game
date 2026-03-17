@@ -201,6 +201,10 @@ func _ready() -> void:
 			hq_comms.sunset_hour = sunset_hour
 			game_flow_panel.sunset = sunset_hour
 
+	# Apply scenario overrides to game systems
+	if scenario_loader != null and not scenario_loader.overrides.is_empty():
+		_apply_scenario_overrides(scenario_loader.overrides)
+
 	_setup_display_bar()  # Also creates info_label
 	# Run one tick to initialize all systems (comms, morale, LOS, etc.)
 	_on_time_advanced(0.0)
@@ -405,6 +409,44 @@ func _init_unit_ammo_and_morale(unit: Dictionary) -> void:
 	unit["in_comms"] = false
 	unit["in_hq_los"] = false
 	unit["hq_switch_remaining"] = 0.0
+
+
+func _apply_scenario_overrides(overrides: Dictionary) -> void:
+	# OODA overrides
+	var ooda_ov = overrides.get("ooda", {})
+	if ooda_ov is Dictionary:
+		# Per-side OODA base cycles stored for use in _calculate_ooda_cycle
+		if "player_base_cycle_minutes" in ooda_ov:
+			# Store on hq_comms for player OODA calculation
+			hq_comms.ooda_base_cycle = float(ooda_ov["player_base_cycle_minutes"])
+		if "enemy_base_cycle_minutes" in ooda_ov:
+			# Store for enemy AI timing
+			hq_comms.enemy_ooda_base_cycle = float(ooda_ov["enemy_base_cycle_minutes"])
+
+	# Night overrides (per-side)
+	var night_ov = overrides.get("night", {})
+	if night_ov is Dictionary:
+		if "player_spotting_modifier" in night_ov:
+			combat_resolver.night_spotting_modifier = float(night_ov["player_spotting_modifier"])
+		if "player_accuracy_modifier" in night_ov:
+			combat_resolver.night_accuracy_modifier = float(night_ov["player_accuracy_modifier"])
+		if "player_range_modifier" in night_ov:
+			combat_resolver.night_range_modifier = float(night_ov["player_range_modifier"])
+		# Enemy night modifiers stored separately
+		if "enemy_spotting_modifier" in night_ov:
+			combat_resolver.enemy_night_spotting_modifier = float(night_ov["enemy_spotting_modifier"])
+		if "enemy_accuracy_modifier" in night_ov:
+			combat_resolver.enemy_night_accuracy_modifier = float(night_ov["enemy_accuracy_modifier"])
+		if "enemy_range_modifier" in night_ov:
+			combat_resolver.enemy_night_range_modifier = float(night_ov["enemy_range_modifier"])
+
+	# HQ overrides (per-side)
+	var hq_ov = overrides.get("hq", {})
+	if hq_ov is Dictionary:
+		if "player_comms_order_buff" in hq_ov:
+			hq_comms.hq_comms_order_buff = float(hq_ov["player_comms_order_buff"])
+		if "player_los_order_buff" in hq_ov:
+			hq_comms.hq_los_order_buff = float(hq_ov["player_los_order_buff"])
 
 
 func _load_scenario_forces(loader: ScenarioLoader) -> void:

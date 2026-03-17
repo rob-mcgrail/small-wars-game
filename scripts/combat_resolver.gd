@@ -15,9 +15,14 @@ var order_manager: OrderManager
 var game_clock: GameClock
 
 # Night config (set by hex_map after construction)
+# Player defaults
 var night_accuracy_modifier: float = 0.4
 var night_range_modifier: float = 0.5
 var night_spotting_modifier: float = 0.3
+# Enemy-specific (default to same as player, overridden by scenario)
+var enemy_night_accuracy_modifier: float = 0.4
+var enemy_night_range_modifier: float = 0.5
+var enemy_night_spotting_modifier: float = 0.3
 var sunrise_hour: int = 6
 var sunset_hour: int = 19
 

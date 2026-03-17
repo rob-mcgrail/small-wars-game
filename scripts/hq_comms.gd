@@ -21,6 +21,7 @@ var hq_auto_switch_minutes: float = 10.0
 
 # OODA config values (set post-construction)
 var ooda_base_cycle: float = 15.0
+var enemy_ooda_base_cycle: float = 15.0
 var ooda_min_cycle: float = 5.0
 var ooda_max_cycle: float = 45.0
 var ooda_training_modifiers: Dictionary = {}

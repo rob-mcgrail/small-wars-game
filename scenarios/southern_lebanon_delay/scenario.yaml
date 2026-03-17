@@ -18,6 +18,26 @@ start_minute: 0
 sunrise_hour: 5
 sunset_hour: 20
 
+# Per-scenario overrides for game settings
+overrides:
+  ooda:
+    # IDF has faster staff work than Hezbollah militia
+    player_base_cycle_minutes: 20
+    enemy_base_cycle_minutes: 12
+  night:
+    # IDF has thermal optics - reduced night penalties
+    enemy_spotting_modifier: 0.6
+    enemy_accuracy_modifier: 0.7
+    enemy_range_modifier: 0.8
+    # Hezbollah has no NVGs - standard penalties
+    player_spotting_modifier: 0.3
+    player_accuracy_modifier: 0.4
+    player_range_modifier: 0.5
+  hq:
+    # Hezbollah has pre-delegated authority - units more autonomous
+    player_comms_order_buff: 0.7
+    player_los_order_buff: 0.5
+
 victory:
   primary:
     type: hold_line

@@ -23,6 +23,7 @@ var enemy_forces: Array = []
 var reinforcements: Array = []
 var victory: Dictionary = {}
 var time_limit_hours: float = 24.0
+var overrides: Dictionary = {}  # per-scenario game setting overrides
 
 # Equipment data (loaded from equipment.yaml)
 var weapons: Dictionary = {}
@@ -111,6 +112,11 @@ func load_scenario(path: String) -> bool:
 		victory = vic
 
 	time_limit_hours = float(victory.get("time_limit_hours", 24.0))
+
+	# Parse overrides
+	var ov = cfg.get_value("overrides", {})
+	if ov is Dictionary:
+		overrides = ov
 
 	return true
 
