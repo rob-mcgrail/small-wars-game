@@ -221,15 +221,29 @@ func reset_ooda_count() -> void:
 	_update_button_state()
 
 
+var _is_paused: bool = false
+
+
+func set_paused(paused: bool) -> void:
+	_is_paused = paused
+	_update_button_state()
+
+
 func _update_button_state() -> void:
 	if game_clock == null:
 		return
 	if game_clock.is_orders_phase():
 		# Green: EXECUTE ORDERS
-		action_button.text = "EXECUTE ORDERS"
+		action_button.text = "EXECUTE ORDERS [Enter]"
 		action_button.disabled = false
 		can_interrupt = false
+		_is_paused = false
 		_set_button_style_green()
+	elif _is_paused:
+		# Purple: PAUSED
+		action_button.text = "PAUSED [Space]"
+		action_button.disabled = false
+		_set_button_style_purple()
 	elif can_interrupt:
 		# Orange: INTERRUPT WITH ORDERS
 		action_button.text = "INTERRUPT WITH ORDERS"
@@ -273,6 +287,23 @@ func _set_button_style_orange() -> void:
 	action_button.add_theme_stylebox_override("hover", h)
 
 
+func _set_button_style_purple() -> void:
+	var s := StyleBoxFlat.new()
+	s.bg_color = Color(0.35, 0.15, 0.5, 0.9)
+	s.border_color = Color(0.6, 0.3, 0.8)
+	s.border_width_top = 1; s.border_width_left = 1
+	s.border_width_right = 1; s.border_width_bottom = 1
+	s.corner_radius_top_left = 2; s.corner_radius_top_right = 2
+	s.corner_radius_bottom_left = 2; s.corner_radius_bottom_right = 2
+	s.content_margin_left = 8.0; s.content_margin_right = 8.0
+	s.content_margin_top = 4.0; s.content_margin_bottom = 4.0
+	action_button.add_theme_stylebox_override("normal", s)
+	action_button.add_theme_color_override("font_color", Color(0.85, 0.7, 1.0))
+	var h := s.duplicate()
+	h.bg_color = Color(0.45, 0.2, 0.6, 0.9)
+	action_button.add_theme_stylebox_override("hover", h)
+
+
 func _set_button_style_disabled() -> void:
 	var s := StyleBoxFlat.new()
 	s.bg_color = Color(0.15, 0.15, 0.15, 0.7)
@@ -290,8 +321,13 @@ signal execute_pressed()
 signal interrupt_pressed()
 
 
+signal unpause_pressed()
+
+
 func _on_action_pressed() -> void:
-	if can_interrupt:
+	if _is_paused:
+		unpause_pressed.emit()
+	elif can_interrupt:
 		interrupt_pressed.emit()
 	elif game_clock and game_clock.is_orders_phase():
 		execute_pressed.emit()

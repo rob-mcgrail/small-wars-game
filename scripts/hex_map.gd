@@ -708,6 +708,7 @@ func _setup_game_flow() -> void:
 	game_flow_panel.sunset = sunset_hour
 	game_flow_panel.execute_pressed.connect(_on_execute_pressed)
 	game_flow_panel.interrupt_pressed.connect(_on_interrupt_pressed)
+	game_flow_panel.unpause_pressed.connect(_toggle_pause)
 
 
 func _on_execute_pressed() -> void:
@@ -883,6 +884,13 @@ func _on_unit_moved(unit_name: String) -> void:
 				selected_unit = unit
 				_calculate_los(unit)
 				break
+
+
+func _toggle_pause() -> void:
+	if game_clock.current_phase != GameClock.Phase.EXECUTING:
+		return
+	game_clock.paused = not game_clock.paused
+	game_flow_panel.set_paused(game_clock.paused)
 
 
 func _begin_execution() -> void:
@@ -1885,9 +1893,11 @@ func _unhandled_input(event: InputEvent) -> void:
 			KEY_C:
 				current_pursuit = Order.Pursuit.PRESS
 				_update_info_label()
-			KEY_SPACE:
+			KEY_ENTER:
 				if game_clock.is_orders_phase():
 					_begin_execution()
+			KEY_SPACE:
+				_toggle_pause()
 			KEY_ESCAPE:
 				_handle_escape()
 

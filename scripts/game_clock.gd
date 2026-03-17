@@ -8,6 +8,7 @@ signal orders_phase_started()
 enum Phase { ORDERS, EXECUTING }
 
 var current_phase: Phase = Phase.ORDERS
+var paused: bool = false
 
 # Game time in minutes from midnight
 var game_time_minutes: float = 360.0  # 06:00
@@ -35,6 +36,8 @@ func _ready() -> void:
 
 func _process(delta: float) -> void:
 	if current_phase != Phase.EXECUTING:
+		return
+	if paused:
 		return
 
 	var advance := delta / seconds_per_game_minute
