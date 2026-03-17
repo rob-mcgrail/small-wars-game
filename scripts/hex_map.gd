@@ -624,6 +624,10 @@ func _check_victory_conditions() -> void:
 	## Check scenario victory/defeat conditions each tick.
 	if scenario_loader == null or scenario_ended:
 		return
+	# Don't check victory on the first tick (game hasn't started yet)
+	var start_time: float = float(scenario_loader.start_hour) * 60.0 + float(scenario_loader.start_minute)
+	if game_clock.game_time_minutes <= start_time:
+		return
 
 	var victory_data: Dictionary = scenario_loader.victory
 
