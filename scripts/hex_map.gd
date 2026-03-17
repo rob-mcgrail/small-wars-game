@@ -148,6 +148,9 @@ var destruction_los_witness_shock: int = 10
 var death_markers: Dictionary = {}
 
 # Fog of war
+# Fog of war mode: "full_knowledge", "satellite", "approximate", "total"
+var fog_of_war_mode: String = "approximate"
+var satellite_range: int = 6
 var revealed_hexes: Dictionary = {}  # Vector2i -> true
 var spotted_enemies: Dictionary = {}  # unit name -> Vector2i (current spotted position)
 var last_seen_enemies: Dictionary = {}  # Vector2i -> float (game_time when enemy was last seen there)
@@ -204,6 +207,12 @@ func _ready() -> void:
 	# Apply scenario overrides to game systems
 	if scenario_loader != null and not scenario_loader.overrides.is_empty():
 		_apply_scenario_overrides(scenario_loader.overrides)
+
+	# Set fog of war mode from player faction
+	if scenario_loader != null and not scenario_loader.player_faction.is_empty():
+		fog_of_war_mode = str(scenario_loader.player_faction.get("fog_of_war", "approximate"))
+		satellite_range = int(scenario_loader.player_faction.get("satellite_range", 6))
+		_init_fog_of_war()
 
 	_setup_display_bar()  # Also creates info_label
 	# Run one tick to initialize all systems (comms, morale, LOS, etc.)
@@ -1591,6 +1600,38 @@ func _on_order_cleared(unit_name: String) -> void:
 	queue_redraw()
 
 
+func _init_fog_of_war() -> void:
+	## Pre-reveal hexes based on fog_of_war_mode
+	match fog_of_war_mode:
+		"full_knowledge":
+			# Reveal everything - local knowledge, know every hill and grove
+			for row in range(map_rows):
+				for col in range(map_cols):
+					revealed_hexes[Vector2i(col, row)] = true
+		"satellite":
+			# Satellite imaging: all terrain types visible everywhere,
+			# but elevation detail only within satellite_range of roads/towns
+			# Reveal hexes near infrastructure with full detail
+			for row in range(map_rows):
+				for col in range(map_cols):
+					var code: String = terrain_grid[row][col]
+					if code == "S" or code == "T" or code == "C" or code == "R":
+						# Infrastructure hex + surroundings get full reveal
+						for dc in range(-satellite_range, satellite_range + 1):
+							for dr in range(-satellite_range, satellite_range + 1):
+								var c: int = col + dc
+								var r: int = row + dr
+								if c >= 0 and c < map_cols and r >= 0 and r < map_rows:
+									if hex_grid.hex_distance(Vector2i(col, row), Vector2i(c, r)) <= satellite_range:
+										revealed_hexes[Vector2i(c, r)] = true
+		"approximate":
+			# Default: infrastructure visible, rest hidden until scouted
+			pass
+		"total":
+			# Nothing visible until scouted
+			pass
+
+
 func _update_fog_of_war() -> void:
 	# 1. Reveal hexes within player units' extended spotting range
 	for unit in units:
@@ -1618,6 +1659,29 @@ func _update_fog_of_war() -> void:
 			var tname: String = target.get("name", "")
 			var tpos := Vector2i(target["col"], target["row"])
 			new_spotted[tname] = tpos
+
+	# 2b. Town support spotting - friendly towns spot enemies in their radius
+	if scenario_loader != null:
+		for ts in scenario_loader.town_support:
+			var ts_faction: String = str(ts.get("faction", ""))
+			if ts_faction != "player":
+				continue
+			var ts_hex_arr = ts.get("hex", [])
+			if not (ts_hex_arr is Array) or ts_hex_arr.size() < 2:
+				continue
+			var ts_pos := Vector2i(int(ts_hex_arr[0]), int(ts_hex_arr[1]))
+			var ts_range: int = int(ts.get("spot_range", 8))
+			var ts_elev: int = elevation_grid[ts_pos.y][ts_pos.x]
+			for enemy in units:
+				if enemy.get("side", "player") == "player":
+					continue
+				if enemy.get("unit_status", "") == "DESTROYED":
+					continue
+				var e_pos := Vector2i(enemy["col"], enemy["row"])
+				if hex_grid.hex_distance(ts_pos, e_pos) <= ts_range:
+					if hex_grid.has_los(ts_pos, ts_elev, e_pos):
+						var ename: String = enemy.get("name", "")
+						new_spotted[ename] = e_pos
 
 	# 3. Enemies that were spotted last tick but aren't now -> last_seen
 	for uname in spotted_enemies:
@@ -1813,7 +1877,9 @@ func _draw() -> void:
 
 			# Fog of war: check if hex is revealed
 			var hex_coord := Vector2i(col, row)
-			var always_known := code == "S" or code == "T" or code == "C" or code == "R"
+			var always_known := false
+			if fog_of_war_mode != "total":
+				always_known = code == "S" or code == "T" or code == "C" or code == "R"
 			var is_revealed := always_known or hex_coord in revealed_hexes
 
 			if is_revealed:

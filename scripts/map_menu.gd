@@ -22,8 +22,7 @@ func _scan_maps() -> void:
 
 	var dir := DirAccess.open("res://maps")
 	if dir == null:
-		push_error("MapMenu: Cannot open maps directory")
-		return
+		return  # No sandbox maps directory
 
 	dir.list_dir_begin()
 	var files: Array[String] = []

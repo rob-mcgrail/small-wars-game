@@ -10,6 +10,10 @@ night:
   accuracy_modifier: 0.7
   range_modifier: 0.8
 
+# Fog of war: full_knowledge, satellite, approximate, total
+fog_of_war: satellite
+satellite_range: 6
+
 # HQ command modifiers
 hq:
   comms_order_buff: 0.8

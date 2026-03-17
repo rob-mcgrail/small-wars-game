@@ -30,6 +30,7 @@ var reinforcements: Array = []
 var victory: Dictionary = {}
 var time_limit_hours: float = 24.0
 var overrides: Dictionary = {}  # per-scenario game setting overrides (legacy)
+var town_support: Array = []  # towns that provide spotting for factions
 
 # Equipment data (loaded from equipment files)
 var weapons: Dictionary = {}
@@ -146,6 +147,11 @@ func _load_conflict_scenario() -> bool:
 	var rf = cfg.get_value("reinforcements", [])
 	if rf is Array:
 		reinforcements = rf
+
+	# Parse town support
+	var ts = cfg.get_value("town_support", [])
+	if ts is Array:
+		town_support = ts
 
 	# Parse victory conditions
 	var vic = cfg.get_value("victory", {})

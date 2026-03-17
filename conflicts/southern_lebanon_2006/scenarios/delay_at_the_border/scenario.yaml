@@ -17,6 +17,30 @@ factions:
   player: hezbollah
   enemy: idf
 
+# Town support: towns/cities that provide spotting for a faction
+# spot_range in hexes (4km = 8 hexes at 500m/hex)
+town_support:
+  - hex: [20, 20]
+    faction: player
+    spot_range: 8
+    name: "Bint Jbeil"
+  - hex: [30, 35]
+    faction: player
+    spot_range: 8
+    name: "Maroun al-Ras"
+  - hex: [15, 17]
+    faction: player
+    spot_range: 8
+    name: "Aita ash-Shab"
+  - hex: [45, 20]
+    faction: player
+    spot_range: 8
+    name: "Khiam"
+  - hex: [30, 10]
+    faction: player
+    spot_range: 8
+    name: "Haris"
+
 start_hour: 18
 start_minute: 0
 sunrise_hour: 5
