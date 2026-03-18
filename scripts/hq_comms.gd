@@ -19,22 +19,9 @@ var hq_los_accuracy_buff: float = 1.1
 var hq_los_suppression_resistance: float = 0.85
 var hq_auto_switch_minutes: float = 10.0
 
-# OODA config values (set post-construction)
-var ooda_base_cycle: float = 15.0
-var enemy_ooda_base_cycle: float = 15.0
-var ooda_min_cycle: float = 5.0
-var ooda_max_cycle: float = 45.0
-var ooda_training_modifiers: Dictionary = {}
-var ooda_hq_moving_penalty: float = 1.5
-var ooda_hq_suppressed_penalty: float = 2.0
-var ooda_hq_destroyed_penalty: float = 3.0
-var ooda_hq_crew_loss_per: float = 0.25
-var ooda_direct_to_top_penalty: float = 1.3
-
 # Night config (set post-construction)
 var sunrise_hour: int = 6
 var sunset_hour: int = 19
-var night_ooda_penalty: float = 1.5
 
 # Spotting range delegate - set by hex_map to combat_resolver.get_effective_spotting_range
 var get_effective_spotting_range: Callable
@@ -141,83 +128,3 @@ func get_hq_order_modifier(unit: Dictionary) -> float:
 	if unit.get("in_comms", false):
 		return hq_comms_order_buff
 	return 1.0
-
-
-func calculate_ooda_cycle() -> Array:
-	## Calculate the current OODA cycle length based on top-level HQ status.
-	## Returns [cycle_float, breakdown_array] so the caller can update UI.
-	var cycle: float = ooda_base_cycle
-	var breakdown: Array[String] = ["Base: %.0f min" % ooda_base_cycle]
-
-	# Find the top-level HQ
-	var top_hq: Dictionary = {}
-	for unit in units:
-		if unit.get("side", "player") != "player":
-			continue
-		var utype: Dictionary = unit_types.get(unit.get("type_code", ""), {})
-		if utype.get("is_hq", false) and int(utype.get("hq_level", 0)) == 1:
-			top_hq = unit
-			break
-
-	if top_hq.is_empty() or top_hq.get("unit_status", "") == "DESTROYED":
-		cycle *= ooda_hq_destroyed_penalty
-		breakdown.append("HQ destroyed: x%.1f" % ooda_hq_destroyed_penalty)
-		var result: float = clampf(cycle, ooda_min_cycle, ooda_max_cycle)
-		return [result, breakdown]
-
-	# Training modifier from HQ unit type
-	var hq_utype: Dictionary = unit_types.get(top_hq.get("type_code", ""), {})
-	var training: String = str(hq_utype.get("training", "regular"))
-	var train_mod: float = ooda_training_modifiers.get(training, 1.0)
-	cycle *= train_mod
-	if train_mod != 1.0:
-		breakdown.append("HQ training (%s): x%.1f" % [training, train_mod])
-
-	# HQ moving penalty
-	var hq_order: Order = order_manager.get_order(top_hq.get("name", ""))
-	if hq_order != null and hq_order.status == Order.Status.EXECUTING:
-		cycle *= ooda_hq_moving_penalty
-		breakdown.append("HQ moving: x%.1f" % ooda_hq_moving_penalty)
-
-	# HQ suppressed penalty
-	var hq_supp: float = combat.get_suppression(top_hq.get("name", ""))
-	if hq_supp > 10:
-		cycle *= ooda_hq_suppressed_penalty
-		breakdown.append("HQ under fire: x%.1f" % ooda_hq_suppressed_penalty)
-
-	# HQ crew casualties
-	var max_crew: int = int(hq_utype.get("crew", 3))
-	var cur_crew: int = int(top_hq.get("current_crew", max_crew))
-	var crew_lost: int = max_crew - cur_crew
-	if crew_lost > 0:
-		var crew_mult: float = 1.0 + float(crew_lost) * ooda_hq_crew_loss_per
-		cycle *= crew_mult
-		breakdown.append("HQ casualties (%d lost): x%.1f" % [crew_lost, crew_mult])
-
-	# Check if any combat units are directly under top-level HQ (bypassing company layer)
-	var top_hq_name: String = top_hq.get("name", "")
-	var has_direct_reports: bool = false
-	for u in units:
-		if u.get("side", "player") != "player":
-			continue
-		if u.get("unit_status", "") == "DESTROYED":
-			continue
-		var u_utype: Dictionary = unit_types.get(u.get("type_code", ""), {})
-		if u_utype.get("is_hq", false):
-			continue
-		if u.get("assigned_hq", "") == top_hq_name:
-			has_direct_reports = true
-			break
-	if has_direct_reports:
-		cycle *= ooda_direct_to_top_penalty
-		breakdown.append("Units under direct BHQ command: x%.1f" % ooda_direct_to_top_penalty)
-
-	# Night penalty
-	if _is_night():
-		cycle *= night_ooda_penalty
-		breakdown.append("Night: x%.1f" % night_ooda_penalty)
-
-	var result: float = clampf(cycle, ooda_min_cycle, ooda_max_cycle)
-	breakdown.append("---")
-	breakdown.append("Total: %.0f min" % result)
-	return [result, breakdown]

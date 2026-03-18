@@ -50,7 +50,6 @@ signal pursuit_changed(unit_name: String, pursuit: Order.Pursuit)
 signal stack_unit_selected(unit_name: String)
 
 var _current_unit_name: String = ""
-var _is_orders_phase: bool = true
 
 var status_label: Label
 
@@ -351,10 +350,6 @@ func _ready() -> void:
 	panel.visible = false
 
 
-func set_orders_phase(is_orders: bool) -> void:
-	_is_orders_phase = is_orders
-
-
 func show_unit(unit: Dictionary, utype: Dictionary, order: Order = null, game_time: float = 0.0, suppression_val: float = 0.0) -> void:
 	_current_unit_name = unit.get("name", "")
 	name_label.text = unit.get("name", "?")
@@ -549,9 +544,8 @@ func show_unit(unit: Dictionary, utype: Dictionary, order: Order = null, game_ti
 			order_type_label.text += " [LOOPING]"
 		order_type_label.visible = true
 
-		# Show posture/ROE buttons only if order hasn't started executing and we're in orders phase
-		var can_change := _is_orders_phase and \
-			order.status != Order.Status.EXECUTING and \
+		# Show posture/ROE buttons only if order hasn't started executing
+		var can_change := order.status != Order.Status.EXECUTING and \
 			order.status != Order.Status.COMPLETE
 		posture_container.visible = can_change
 		roe_container.visible = can_change
@@ -611,9 +605,8 @@ func show_unit(unit: Dictionary, utype: Dictionary, order: Order = null, game_ti
 			vbox.move_child(wp_label, clear_order_button.get_index())
 			waypoint_labels.append(wp_label)
 
-		# Show clear button only during orders phase for non-executing orders
-		clear_order_button.visible = _is_orders_phase and \
-			order.status != Order.Status.EXECUTING and \
+		# Show clear button for non-executing orders
+		clear_order_button.visible = order.status != Order.Status.EXECUTING and \
 			order.status != Order.Status.COMPLETE
 	else:
 		order_status_label.text = "Holding position"

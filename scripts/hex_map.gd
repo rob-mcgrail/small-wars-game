@@ -118,22 +118,11 @@ var hq_los_morale_buff: int = 5
 var hq_los_accuracy_buff: float = 1.1
 var hq_los_suppression_resistance: float = 0.85
 
-# OODA config
-var ooda_base_cycle: float = 15.0
-var ooda_min_cycle: float = 5.0
-var ooda_max_cycle: float = 45.0
-var ooda_training_modifiers: Dictionary = {}
-var ooda_hq_moving_penalty: float = 1.5
-var ooda_hq_suppressed_penalty: float = 2.0
-var ooda_hq_destroyed_penalty: float = 3.0
-var ooda_hq_crew_loss_per: float = 0.25
-var ooda_direct_to_top_penalty: float = 1.3
 var hq_auto_switch_minutes: float = 10.0
 
 # Night config
 var sunrise_hour: int = 6
 var sunset_hour: int = 19
-var night_ooda_penalty: float = 1.5
 var night_spotting_modifier: float = 0.3
 var night_accuracy_modifier: float = 0.4
 var night_range_modifier: float = 0.5
@@ -193,7 +182,6 @@ func _ready() -> void:
 	# Override clock and day/night from scenario
 	if scenario_loader != null:
 		game_clock.game_time_minutes = float(scenario_loader.start_hour) * 60.0 + float(scenario_loader.start_minute)
-		game_clock.next_orders_at = game_clock.game_time_minutes + ooda_base_cycle
 		if scenario_loader.sunrise_hour >= 0:
 			sunrise_hour = scenario_loader.sunrise_hour
 			combat_resolver.sunrise_hour = sunrise_hour
@@ -244,24 +232,11 @@ func _load_hq_config() -> void:
 	hq_los_accuracy_buff = cfg.get_float("hq.los_accuracy_buff", 1.1)
 	hq_los_suppression_resistance = cfg.get_float("hq.los_suppression_resistance", 0.85)
 
-	# OODA config
-	ooda_base_cycle = cfg.get_float("ooda.base_cycle_minutes", 15.0)
-	ooda_min_cycle = cfg.get_float("ooda.min_cycle_minutes", 5.0)
-	ooda_max_cycle = cfg.get_float("ooda.max_cycle_minutes", 45.0)
-	var ooda_mods = cfg.get_value("ooda.training_modifier", {})
-	for key in ooda_mods:
-		ooda_training_modifiers[key] = float(ooda_mods[key])
-	ooda_hq_moving_penalty = cfg.get_float("ooda.hq_moving_penalty", 1.5)
-	ooda_hq_suppressed_penalty = cfg.get_float("ooda.hq_suppressed_penalty", 2.0)
-	ooda_hq_destroyed_penalty = cfg.get_float("ooda.hq_destroyed_penalty", 3.0)
-	ooda_hq_crew_loss_per = cfg.get_float("ooda.hq_crew_loss_penalty_per", 0.25)
-	ooda_direct_to_top_penalty = cfg.get_float("hq.direct_to_top_hq_ooda_penalty", 1.3)
 	hq_auto_switch_minutes = cfg.get_float("hq.auto_switch_minutes", 10.0)
 
 	# Night config
 	sunrise_hour = cfg.get_int("time.sunrise_hour", 6)
 	sunset_hour = cfg.get_int("time.sunset_hour", 19)
-	night_ooda_penalty = cfg.get_float("night.ooda_penalty", 1.5)
 	night_spotting_modifier = cfg.get_float("night.spotting_range_modifier", 0.3)
 	night_accuracy_modifier = cfg.get_float("night.accuracy_modifier", 0.4)
 	night_range_modifier = cfg.get_float("night.effective_range_modifier", 0.5)
@@ -425,17 +400,6 @@ func _init_unit_ammo_and_morale(unit: Dictionary) -> void:
 
 
 func _apply_scenario_overrides(overrides: Dictionary) -> void:
-	# OODA overrides
-	var ooda_ov = overrides.get("ooda", {})
-	if ooda_ov is Dictionary:
-		# Per-side OODA base cycles stored for use in _calculate_ooda_cycle
-		if "player_base_cycle_minutes" in ooda_ov:
-			# Store on hq_comms for player OODA calculation
-			hq_comms.ooda_base_cycle = float(ooda_ov["player_base_cycle_minutes"])
-		if "enemy_base_cycle_minutes" in ooda_ov:
-			# Store for enemy AI timing
-			hq_comms.enemy_ooda_base_cycle = float(ooda_ov["enemy_base_cycle_minutes"])
-
 	# Night overrides (per-side)
 	var night_ov = overrides.get("night", {})
 	if night_ov is Dictionary:
@@ -1283,57 +1247,19 @@ func _setup_game_flow() -> void:
 	hq_comms.hq_los_accuracy_buff = hq_los_accuracy_buff
 	hq_comms.hq_los_suppression_resistance = hq_los_suppression_resistance
 	hq_comms.hq_auto_switch_minutes = hq_auto_switch_minutes
-	hq_comms.ooda_base_cycle = ooda_base_cycle
-	hq_comms.ooda_min_cycle = ooda_min_cycle
-	hq_comms.ooda_max_cycle = ooda_max_cycle
-	hq_comms.ooda_training_modifiers = ooda_training_modifiers
-	hq_comms.ooda_hq_moving_penalty = ooda_hq_moving_penalty
-	hq_comms.ooda_hq_suppressed_penalty = ooda_hq_suppressed_penalty
-	hq_comms.ooda_hq_destroyed_penalty = ooda_hq_destroyed_penalty
-	hq_comms.ooda_hq_crew_loss_per = ooda_hq_crew_loss_per
-	hq_comms.ooda_direct_to_top_penalty = ooda_direct_to_top_penalty
 	hq_comms.sunrise_hour = sunrise_hour
 	hq_comms.sunset_hour = sunset_hour
-	hq_comms.night_ooda_penalty = night_ooda_penalty
 	hq_comms.get_effective_spotting_range = combat_resolver.get_effective_spotting_range
 
 	game_clock.time_advanced.connect(_on_time_advanced)
-	game_clock.phase_changed.connect(_on_phase_changed)
 
 	game_flow_panel = GameFlowPanel.new()
 	add_child(game_flow_panel)
 	game_flow_panel.set_clock(game_clock)
 	game_flow_panel.sunrise = sunrise_hour
 	game_flow_panel.sunset = sunset_hour
-	game_flow_panel.execute_pressed.connect(_on_execute_pressed)
-	game_flow_panel.interrupt_pressed.connect(_on_interrupt_pressed)
-	game_flow_panel.unpause_pressed.connect(_toggle_pause)
+	game_flow_panel.toggle_pause.connect(_toggle_pause)
 
-
-func _on_execute_pressed() -> void:
-	if game_clock.is_orders_phase():
-		game_flow_panel.reset_ooda_count()
-		_begin_execution()
-
-
-var _interrupted := false
-
-
-func _on_interrupt_pressed() -> void:
-	# Force back to orders phase mid-execution
-	_interrupted = true
-	game_clock.current_phase = GameClock.Phase.ORDERS
-	game_clock.phase_changed.emit("ORDERS")
-	game_flow_panel.reset_ooda_count()
-
-
-func _on_phase_changed(phase: String) -> void:
-	unit_panel.set_orders_phase(phase == "ORDERS")
-	if phase == "ORDERS":
-		if _interrupted:
-			_interrupted = false
-			return
-		_check_auto_continue()
 
 
 func _build_carousel_order() -> void:
@@ -1486,79 +1412,8 @@ func _on_unit_moved(unit_name: String) -> void:
 
 
 func _toggle_pause() -> void:
-	if game_clock.current_phase != GameClock.Phase.EXECUTING:
-		return
 	game_clock.paused = not game_clock.paused
 	game_flow_panel.set_paused(game_clock.paused)
-
-
-func _begin_execution() -> void:
-	if not game_clock.is_orders_phase():
-		return
-	var ooda_result: Array = hq_comms.calculate_ooda_cycle()
-	var cycle: float = ooda_result[0]
-	var breakdown: Array = ooda_result[1]
-	game_clock.set_next_cycle(cycle)
-	game_flow_panel.cycle_label.text = "OODA cycle: %d min" % ceili(cycle)
-	game_flow_panel.cycle_label.tooltip_text = "\n".join(breakdown)
-	game_clock.end_orders_phase()
-
-
-func _check_auto_continue() -> void:
-	var check_engaged := game_flow_panel.is_progress_until_engaged()
-	var check_orders := game_flow_panel.is_progress_until_orders()
-
-	if not check_engaged and not check_orders:
-		return
-
-	# Engaged check takes priority - stop immediately if anyone is in combat
-	if check_engaged:
-		var engaged_unit := _find_engaged_unit()
-		if not engaged_unit.is_empty():
-			_select_and_center_unit(engaged_unit)
-			return
-
-	# Then check if anyone needs orders
-	if check_orders:
-		var unit_needing_orders := _find_unit_needing_orders()
-		if not unit_needing_orders.is_empty():
-			_select_and_center_unit(unit_needing_orders)
-			return
-
-	# Nothing needs attention - keep going, but enable interrupt after phase changes
-	_begin_execution()
-	game_flow_panel.set_interruptable()
-
-
-func _find_unit_needing_orders() -> Dictionary:
-	for unit in units:
-		if unit.get("side", "player") != "player":
-			continue
-		var status: String = unit.get("unit_status", "")
-		if status == "DESTROYED":
-			continue
-		var uname: String = unit.get("name", "")
-		var order: Order = order_manager.get_order(uname)
-		# Only flag units whose orders just completed - not units that were never given orders
-		if order != null and (order.status == Order.Status.COMPLETE or order.status == Order.Status.COUNTERMANDED):
-			var utype: Dictionary = unit_types.get(unit.get("type_code", ""), {})
-			if not utype.get("is_hq", false):
-				return unit
-	return {}
-
-
-func _find_engaged_unit() -> Dictionary:
-	for unit in units:
-		if unit.get("side", "player") != "player":
-			continue
-		var status: String = unit.get("unit_status", "")
-		if status == "DESTROYED":
-			continue
-		var uname: String = unit.get("name", "")
-		var supp: float = combat.get_suppression(uname)
-		if supp > 0:
-			return unit
-	return {}
 
 
 func _select_and_center_unit(unit: Dictionary) -> void:
@@ -1736,10 +1591,6 @@ func _on_time_advanced(minutes: float) -> void:
 	combat_resolver.check_pursuit()
 	# Update fog of war
 	_update_fog_of_war()
-	# Update OODA cycle display
-	var ooda_display: Array = hq_comms.calculate_ooda_cycle()
-	game_flow_panel.cycle_label.text = "OODA cycle: %d min" % ceili(float(ooda_display[0]))
-	game_flow_panel.cycle_label.tooltip_text = "\n".join(ooda_display[1] as Array)
 	# Scenario systems
 	if scenario_loader != null and not scenario_ended:
 		_check_reinforcements()
@@ -1763,9 +1614,7 @@ func _write_game_log() -> void:
 	if file == null:
 		return
 	file.store_line("=== GAME STATE at %s ===" % game_clock.get_time_string())
-	var log_ooda: Array = hq_comms.calculate_ooda_cycle()
-	file.store_line("Phase: %s  |  OODA cycle: %.0f min" % [
-		game_clock.get_phase_string(), float(log_ooda[0])])
+	file.store_line("Status: %s" % ("PAUSED" if game_clock.paused else "RUNNING"))
 	file.store_line("Night: %s" % str(_is_night()))
 	file.store_line("")
 
@@ -2644,8 +2493,7 @@ func _unhandled_input(event: InputEvent) -> void:
 				current_pursuit = Order.Pursuit.PRESS
 				_update_info_label()
 			KEY_ENTER:
-				if game_clock.is_orders_phase():
-					_begin_execution()
+				_toggle_pause()
 			KEY_SPACE:
 				_toggle_pause()
 			KEY_ESCAPE:
@@ -2669,8 +2517,6 @@ func _handle_escape() -> void:
 
 
 func _handle_move_order(screen_pos: Vector2) -> void:
-	if not game_clock.is_orders_phase():
-		return
 	if selected_unit.is_empty():
 		return
 
@@ -2719,8 +2565,6 @@ func _handle_move_order(screen_pos: Vector2) -> void:
 
 
 func _handle_attack_order(screen_pos: Vector2) -> void:
-	if not game_clock.is_orders_phase():
-		return
 	if selected_unit.is_empty():
 		return
 	var world_pos := screen_pos / zoom_level + camera_offset / zoom_level
