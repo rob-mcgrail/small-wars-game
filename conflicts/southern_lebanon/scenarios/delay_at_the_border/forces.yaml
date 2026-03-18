@@ -58,7 +58,7 @@ templates:
     name: "ATGM Team"
     icon_color: "#6a8a3a"
     symbol: infantry
-    speed_kmh: 4
+    speed_kmh: 6
     default_roe: "fire at will"
     crew: 2
     training: veteran
@@ -73,7 +73,7 @@ templates:
     name: "Fighter Squad"
     icon_color: "#5a7a3a"
     symbol: infantry
-    speed_kmh: 4
+    speed_kmh: 6
     default_roe: "fire at will"
     crew: 8
     training: irregular
@@ -137,7 +137,7 @@ templates:
     name: "IDF Infantry"
     icon_color: "#6a8aaa"
     symbol: infantry
-    speed_kmh: 4
+    speed_kmh: 5
     crew: 8
     training: regular
     morale: 60

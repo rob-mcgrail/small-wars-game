@@ -139,10 +139,24 @@ func resolve_combat(shooter: Dictionary, target: Dictionary,
 
 			# Determine effect using hit zone distribution
 			if target_armor > 0:
-				# Armored target - check penetration first, no close range bonus
-				var pen_chance: float = clampf(float(vs_armor) / float(target_armor + vs_armor), 0.0, 0.9)
+				# Armored target - penetration check
+				# Formula: vs_armor^1.5 / (target_armor^1.5 + vs_armor^1.5)
+				# This gives ATGM (vs_armor 9) vs Merkava (armor 9) = ~50%
+				# But we boost it: if vs_armor >= target_armor, attacker designed to defeat it
+				var atk: float = pow(float(vs_armor), 1.3)
+				var def: float = pow(float(target_armor), 1.3)
+				var pen_chance: float = clampf(atk / (def + atk), 0.0, 0.95)
+				# ATGM/RPG bonus: shaped charge weapons get extra penetration
+				var weapon_type: String = str(weapon.get("type", ""))
+				if weapon_type == "atgm" or weapon_type == "rpg":
+					pen_chance = clampf(pen_chance * 1.4, 0.0, 0.95)
 				if randf() < pen_chance:
-					_apply_hit_zone(result, vs_soft)
+					# Penetrating hit - effect depends on weapon type
+					if weapon_type == "atgm" or weapon_type == "rpg" or weapon_type == "cannon":
+						# Shaped charge / large caliber inside a vehicle is catastrophic
+						_apply_armor_penetration(result, vs_soft)
+					else:
+						_apply_hit_zone(result, vs_soft)
 			else:
 				# Unarmored vehicle - close range is devastating
 				_apply_hit_zone(result, vs_soft, distance_hexes)
@@ -152,6 +166,38 @@ func resolve_combat(shooter: Dictionary, target: Dictionary,
 				result["suppression_added"] += SUPPRESSION_PER_HIT_NEAR
 
 	return result
+
+
+func _apply_armor_penetration(result: Dictionary, vs_soft: int) -> void:
+	## A shaped charge or large round has penetrated armor. This is devastating.
+	## Much more likely to kill crew, cause catastrophic damage, or disable the vehicle.
+	var zone_roll: float = randf()
+	if zone_roll < 0.15:
+		# Catastrophic: ammo/fuel cook-off
+		result["vehicle_damage"] += randf_range(0.5, 0.8)
+		result["mobility_damage"] += randf_range(0.3, 0.6)
+		result["crew_killed"] += 1
+		if randf() < 0.5:
+			result["crew_killed"] += 1  # second crew member
+	elif zone_roll < 0.40:
+		# Crew compartment hit
+		result["crew_killed"] += 1
+		result["vehicle_damage"] += randf_range(0.15, 0.3)
+		if randf() < 0.3:
+			result["crew_killed"] += 1
+	elif zone_roll < 0.60:
+		# Engine/mobility hit
+		result["mobility_damage"] += randf_range(0.4, 0.8)
+		result["vehicle_damage"] += randf_range(0.2, 0.4)
+	elif zone_roll < 0.80:
+		# Systems/weapon hit
+		result["weapon_disabled"] = true
+		result["vehicle_damage"] += randf_range(0.15, 0.3)
+		result["crew_killed"] += 1 if randf() < 0.3 else 0
+	else:
+		# Spalling/fragments - still dangerous
+		result["vehicle_damage"] += randf_range(0.1, 0.25)
+		result["crew_killed"] += 1 if randf() < 0.4 else 0
 
 
 func _apply_hit_zone(result: Dictionary, vs_soft: int, distance: int = 3) -> void:
