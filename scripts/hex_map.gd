@@ -2316,6 +2316,34 @@ func _get_unit_at(coord: Vector2i) -> Dictionary:
 	return destroyed_unit
 
 
+func _cycle_stacked_unit() -> void:
+	## Cycle to the next unit on the same hex
+	var stacked: Array = []
+	for u in units:
+		if int(u["col"]) == selected_hex.x and int(u["row"]) == selected_hex.y:
+			if u.get("unit_status", "") != "DESTROYED":
+				# Skip unspotted enemies
+				if u.get("side", "player") == "enemy":
+					var uname: String = u.get("name", "")
+					if uname not in spotted_enemies:
+						continue
+				stacked.append(u)
+	if stacked.size() <= 1:
+		return
+	# Find current index and advance
+	var current_name: String = selected_unit.get("name", "")
+	var idx: int = 0
+	for i in range(stacked.size()):
+		if stacked[i].get("name", "") == current_name:
+			idx = i
+			break
+	idx = (idx + 1) % stacked.size()
+	selected_unit = stacked[idx]
+	_calculate_los(selected_unit)
+	_update_info_label()
+	unit_panel.set_stacked_units(stacked, selected_unit.get("name", ""))
+
+
 func _update_selected_unit() -> void:
 	selected_unit = _get_unit_at(selected_hex)
 	los_visible.clear()
@@ -2450,8 +2478,12 @@ func _unhandled_input(event: InputEvent) -> void:
 				var world_pos := mb.position / zoom_level + camera_offset / zoom_level
 				var hex_coord: Vector2i = hex_grid.pixel_to_hex(world_pos)
 				if hex_grid.is_valid_hex(hex_coord):
-					selected_hex = hex_coord
-					_update_selected_unit()
+					if hex_coord == selected_hex and not selected_unit.is_empty():
+						# Same hex - cycle to next stacked unit
+						_cycle_stacked_unit()
+					else:
+						selected_hex = hex_coord
+						_update_selected_unit()
 					queue_redraw()
 		elif mb.button_index == MOUSE_BUTTON_RIGHT:
 			if mb.pressed and mb.is_command_or_control_pressed():
@@ -2460,7 +2492,12 @@ func _unhandled_input(event: InputEvent) -> void:
 				# Check if right-clicking on a friendly unit for context menu
 				var world_pos := mb.position / zoom_level + camera_offset / zoom_level
 				var hex_coord: Vector2i = hex_grid.pixel_to_hex(world_pos)
-				var clicked_unit := _get_unit_at(hex_coord)
+				# Use already-selected unit if clicking same hex (respects stack cycling)
+				var clicked_unit: Dictionary = {}
+				if hex_coord == selected_hex and not selected_unit.is_empty():
+					clicked_unit = selected_unit
+				else:
+					clicked_unit = _get_unit_at(hex_coord)
 				if not clicked_unit.is_empty() and clicked_unit.get("side", "player") == "player" \
 						and clicked_unit.get("unit_status", "") != "DESTROYED":
 					_show_unit_context_menu(clicked_unit, mb.position)
