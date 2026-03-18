@@ -1,0 +1,8 @@
+# Scenario manifest - lists all available conflicts and scenarios
+# Required for web builds where directory scanning doesn't work
+conflicts:
+  - name: "Southern Lebanon"
+    folder: southern_lebanon_2006
+    scenarios:
+      - name: "Delay at the Border"
+        folder: delay_at_the_border

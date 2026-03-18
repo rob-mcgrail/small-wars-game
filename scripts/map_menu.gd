@@ -57,11 +57,17 @@ func _scan_maps() -> void:
 
 
 func _scan_conflicts() -> void:
-	## Scan res://conflicts/ for conflict folders. Within each, scan scenarios/.
-	## Display as conflict name headers with scenario buttons underneath.
+	## Load scenarios from manifest (works on web) or fall back to directory scanning.
+
+	# Try manifest first (required for web builds)
+	var manifest_cfg := Config.new()
+	if manifest_cfg.load_file("res://conflicts/manifest.yaml"):
+		_load_from_manifest(manifest_cfg)
+		return
+
+	# Fall back to directory scanning (desktop only)
 	var conflicts_dir := DirAccess.open("res://conflicts")
 	if conflicts_dir == null:
-		# No conflicts directory yet, that's fine
 		return
 
 	conflicts_dir.list_dir_begin()
@@ -85,7 +91,6 @@ func _scan_conflicts() -> void:
 		if scenarios.is_empty():
 			continue
 
-		# Conflict header - derive display name from folder name
 		var conflict_display_name: String = _folder_to_display_name(conflict_folder)
 		var header := Label.new()
 		header.text = conflict_display_name
@@ -93,7 +98,6 @@ func _scan_conflicts() -> void:
 		header.add_theme_color_override("font_color", Color(0.85, 0.75, 0.5, 1.0))
 		map_list.add_child(header)
 
-		# Scenario buttons under this conflict
 		for scenario_info in scenarios:
 			var btn := Button.new()
 			btn.text = "  " + scenario_info["name"]
@@ -105,6 +109,49 @@ func _scan_conflicts() -> void:
 
 			btn.pressed.connect(_on_scenario_button_pressed.bind(path, info))
 			btn.mouse_entered.connect(_on_map_button_hover.bind(info))
+			map_list.add_child(btn)
+
+
+func _load_from_manifest(cfg: Config) -> void:
+	## Load scenario list from manifest.yaml (works on all platforms including web).
+	var conflicts = cfg.get_value("conflicts", [])
+	if not (conflicts is Array):
+		return
+
+	for conflict in conflicts:
+		if not (conflict is Dictionary):
+			continue
+		var conflict_name: String = str(conflict.get("name", ""))
+		var conflict_folder: String = str(conflict.get("folder", ""))
+		var scenarios = conflict.get("scenarios", [])
+		if not (scenarios is Array) or scenarios.is_empty():
+			continue
+
+		var header := Label.new()
+		header.text = conflict_name
+		header.add_theme_font_size_override("font_size", 26)
+		header.add_theme_color_override("font_color", Color(0.85, 0.75, 0.5, 1.0))
+		map_list.add_child(header)
+
+		for scenario in scenarios:
+			if not (scenario is Dictionary):
+				continue
+			var scenario_name: String = str(scenario.get("name", ""))
+			var scenario_folder: String = str(scenario.get("folder", ""))
+			var path: String = "res://conflicts/" + conflict_folder + "/scenarios/" + scenario_folder + "/"
+
+			var loader := ScenarioLoader.new()
+			var desc: String = scenario_name
+			if loader.load_scenario(path):
+				desc = loader.description
+
+			var btn := Button.new()
+			btn.text = "  " + scenario_name
+			btn.custom_minimum_size = Vector2(400, 50)
+			btn.add_theme_font_size_override("font_size", 20)
+
+			btn.pressed.connect(_on_scenario_button_pressed.bind(path, desc))
+			btn.mouse_entered.connect(_on_map_button_hover.bind(desc))
 			map_list.add_child(btn)
 
 
