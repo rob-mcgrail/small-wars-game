@@ -89,7 +89,7 @@ func _ready() -> void:
 	anchor.offset_left = 6
 	anchor.offset_top = -480
 	anchor.offset_right = 300
-	anchor.offset_bottom = -162
+	anchor.offset_bottom = -44
 	anchor.grow_horizontal = Control.GROW_DIRECTION_END
 	anchor.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	add_child(anchor)

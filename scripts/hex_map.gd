@@ -74,11 +74,6 @@ const COLOR_HOVER_OUTLINE := Color(1.0, 1.0, 1.0, 0.5)
 
 # UI
 var info_label: Label
-var hex_panel: PanelContainer
-var panel_coord_label: Label
-var panel_terrain_label: Label
-var panel_elevation_label: Label
-var panel_speed_modifier_label: Label
 var unit_panel: UnitPanel
 var game_clock: GameClock
 var game_flow_panel: GameFlowPanel
@@ -175,7 +170,6 @@ func _ready() -> void:
 	else:
 		_place_starting_units()
 
-	_setup_hex_panel()
 	_setup_unit_panel()
 	_setup_game_flow()
 
@@ -938,81 +932,6 @@ func _setup_info_label() -> void:
 	pass
 
 
-func _setup_hex_panel() -> void:
-	var ui_layer := CanvasLayer.new()
-	ui_layer.layer = 10
-	add_child(ui_layer)
-
-	# Panel container anchored bottom-right
-	hex_panel = PanelContainer.new()
-	hex_panel.custom_minimum_size = Vector2(260, 0)
-	hex_panel.mouse_filter = Control.MOUSE_FILTER_STOP
-
-	# Style: black background with slight transparency
-	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.05, 0.05, 0.05, 0.88)
-	style.border_color = Color(0.35, 0.38, 0.3, 0.6)
-	style.border_width_top = 1
-	style.border_width_left = 1
-	style.border_width_right = 1
-	style.border_width_bottom = 1
-	style.content_margin_left = 16.0
-	style.content_margin_right = 16.0
-	style.content_margin_top = 12.0
-	style.content_margin_bottom = 12.0
-	style.corner_radius_top_left = 2
-	style.corner_radius_top_right = 2
-	style.corner_radius_bottom_left = 2
-	style.corner_radius_bottom_right = 2
-	hex_panel.add_theme_stylebox_override("panel", style)
-
-	# Anchor bottom-left, just above the display bar (36px)
-	var anchor := Control.new()
-	anchor.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
-	anchor.offset_left = 6
-	anchor.offset_top = -160
-	anchor.offset_right = 290
-	anchor.offset_bottom = -44
-	anchor.grow_horizontal = Control.GROW_DIRECTION_END
-	anchor.grow_vertical = Control.GROW_DIRECTION_BEGIN
-	ui_layer.add_child(anchor)
-	anchor.add_child(hex_panel)
-	hex_panel.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
-	hex_panel.grow_horizontal = Control.GROW_DIRECTION_END
-	hex_panel.grow_vertical = Control.GROW_DIRECTION_BEGIN
-
-	var vbox := VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 6)
-	hex_panel.add_child(vbox)
-
-	# Header
-	var header := Label.new()
-	header.text = "HEX INFO"
-	header.add_theme_font_size_override("font_size", 12)
-	header.add_theme_color_override("font_color", Color(0.5, 0.55, 0.45))
-	vbox.add_child(header)
-
-	# Separator
-	var sep := HSeparator.new()
-	sep.add_theme_color_override("separator", Color(0.3, 0.32, 0.25, 0.5))
-	vbox.add_child(sep)
-
-	# Labels
-	panel_coord_label = _make_panel_label()
-	vbox.add_child(panel_coord_label)
-
-	panel_terrain_label = _make_panel_label()
-	vbox.add_child(panel_terrain_label)
-
-	panel_elevation_label = _make_panel_label()
-	vbox.add_child(panel_elevation_label)
-
-	panel_speed_modifier_label = _make_panel_label()
-	vbox.add_child(panel_speed_modifier_label)
-
-	hex_panel.visible = false
-
-
 func _setup_unit_panel() -> void:
 	unit_panel = UnitPanel.new()
 	add_child(unit_panel)
@@ -1675,13 +1594,6 @@ func _write_game_log() -> void:
 		file.store_line(combat.combat_log[i])
 
 	file.close()
-
-
-func _make_panel_label() -> Label:
-	var label := Label.new()
-	label.add_theme_font_size_override("font_size", 18)
-	label.add_theme_color_override("font_color", Color(0.82, 0.84, 0.78))
-	return label
 
 
 func _process(delta: float) -> void:
@@ -2368,16 +2280,6 @@ func _update_info_label() -> void:
 	_update_carousel()
 
 	if selected_hex != Vector2i(-1, -1) and selected_hex.y < terrain_grid.size() and selected_hex.x < terrain_grid[selected_hex.y].size():
-		var code: String = terrain_grid[selected_hex.y][selected_hex.x]
-		var elev: int = elevation_grid[selected_hex.y][selected_hex.x]
-		var tname: String = terrain_types[code]["name"] if code in terrain_types else "unknown"
-		var mcost: float = terrain_types[code]["speed_modifier"] if code in terrain_types else 1.0
-
-		panel_coord_label.text = "Coord:     %d, %d" % [selected_hex.x, selected_hex.y]
-		panel_terrain_label.text = "Terrain:   %s" % tname
-		panel_elevation_label.text = "Elevation: %d" % elev
-		panel_speed_modifier_label.text = "Speed:     %d%%" % int(mcost * 100)
-
 		# Show selected unit's info (use selected_unit, not _get_unit_at, to support stacked selection)
 		if not selected_unit.is_empty():
 			var utype_code: String = selected_unit["type_code"]
@@ -2405,9 +2307,9 @@ func _update_info_label() -> void:
 			else:
 				unit_panel.hide_unit()
 
-		hex_panel.visible = true
+		pass  # hex info removed
 	else:
-		hex_panel.visible = false
+		pass  # hex info removed
 		unit_panel.hide_unit()
 
 
@@ -2515,7 +2417,7 @@ func _handle_escape() -> void:
 	selected_unit = {}
 	los_visible.clear()
 	unit_panel.hide_unit()
-	hex_panel.visible = false
+	pass  # hex info removed
 	queue_redraw()
 
 
