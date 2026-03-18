@@ -52,14 +52,19 @@ func move_units(minutes: float) -> void:
 		var posture_cfg: Dictionary = posture_configs.get(posture_str, {})
 		var posture_speed_mod: float = posture_cfg.get("speed_modifier", 1.0)
 
-		# Get terrain speed modifier for current hex
+		# Get terrain speed modifier for current hex (different for vehicles vs infantry)
 		var cur_terrain: String = terrain_grid[unit["row"]][unit["col"]]
+		var is_infantry: bool = unit.get("type_code", "") == "INF" or int(utype.get("speed_kmh", 50)) <= 10
 		var terrain_speed_mod: float = 1.0
 		if cur_terrain in terrain_types:
-			terrain_speed_mod = float(terrain_types[cur_terrain].get("speed_modifier", 1.0))
+			var t_info: Dictionary = terrain_types[cur_terrain]
+			if is_infantry:
+				terrain_speed_mod = float(t_info.get("infantry_speed", t_info.get("speed_modifier", 1.0)))
+			else:
+				terrain_speed_mod = float(t_info.get("vehicle_speed", t_info.get("speed_modifier", 1.0)))
 
-		if terrain_speed_mod <= 0.0:
-			continue  # impassable
+		if terrain_speed_mod <= 0.0 and not is_infantry:
+			continue  # impassable for vehicles (infantry can ford rivers slowly)
 
 		# Effective speed in km/h (degraded by mobility damage)
 		var effective_speed: float = speed_kmh * posture_speed_mod * terrain_speed_mod

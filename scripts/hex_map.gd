@@ -285,7 +285,9 @@ func _load_terrain_types() -> void:
 		terrain_types[code] = {
 			"name": t.get("name", "unknown"),
 			"color": Color(t.get("color", "#ffffff")),
-			"speed_modifier": float(t.get("speed_modifier", 1.0)),
+			"vehicle_speed": float(t.get("vehicle_speed", t.get("speed_modifier", 1.0))),
+			"infantry_speed": float(t.get("infantry_speed", t.get("speed_modifier", 1.0))),
+			"speed_modifier": float(t.get("vehicle_speed", t.get("speed_modifier", 1.0))),
 		}
 
 
