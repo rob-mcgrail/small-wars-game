@@ -147,7 +147,6 @@ func resolve_combat(shooter: Dictionary, target: Dictionary,
 				var def: float = pow(float(target_armor), 1.3)
 				var pen_chance: float = clampf(atk / (def + atk), 0.0, 0.95)
 				# ATGM/RPG bonus: shaped charge weapons get extra penetration
-				var weapon_type: String = str(weapon.get("type", ""))
 				if weapon_type == "atgm" or weapon_type == "rpg":
 					pen_chance = clampf(pen_chance * 1.4, 0.0, 0.95)
 				if randf() < pen_chance:
