@@ -146,6 +146,10 @@ const LAST_SEEN_DURATION: float = 30.0  # minutes before last-seen marker fades
 var fire_effects: Array = []
 const FIRE_EFFECT_DURATION := 2.0  # seconds (real time)
 
+# Performance throttling
+var _redraw_counter: int = 0
+var _log_counter: int = 0
+
 
 func _ready() -> void:
 	_load_terrain_types()
@@ -1522,13 +1526,20 @@ func _on_time_advanced(minutes: float) -> void:
 		if enemy_ai_accum >= ENEMY_AI_INTERVAL:
 			enemy_ai_accum -= ENEMY_AI_INTERVAL
 			_update_enemy_ai()
-	# Write game state log
-	_write_game_log()
 	# Keep selection tracking the selected unit
 	if not selected_unit.is_empty():
 		selected_hex = Vector2i(selected_unit["col"], selected_unit["row"])
 		_update_info_label()
-	queue_redraw()
+	# Throttle redraws - only every 10th tick during gameplay
+	_redraw_counter += 1
+	if _redraw_counter >= 10:
+		_redraw_counter = 0
+		queue_redraw()
+		# Write game log infrequently too
+		_log_counter += 1
+		if _log_counter >= 6:  # every 60 ticks
+			_log_counter = 0
+			_write_game_log()
 
 
 func _write_game_log() -> void:
