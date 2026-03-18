@@ -1842,8 +1842,10 @@ func _draw() -> void:
 					draw_string(comms_font, comms_label_pos + Vector2(1, 1), comms_label, HORIZONTAL_ALIGNMENT_LEFT, -1, comms_font_size, Color(0, 0, 0, 0.6))
 					draw_string(comms_font, comms_label_pos, comms_label, HORIZONTAL_ALIGNMENT_LEFT, -1, comms_font_size, comms_color)
 
-	# Draw order waypoint lines and markers
+	# Draw order waypoint lines and markers (player units only)
 	for unit in units:
+		if unit.get("side", "player") != "player":
+			continue
 		var uname: String = unit["name"]
 		var order: Order = order_manager.get_order(uname)
 		if order == null or order.status == Order.Status.COMPLETE or order.status == Order.Status.COUNTERMANDED:
