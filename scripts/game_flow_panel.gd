@@ -88,6 +88,7 @@ func _ready() -> void:
 	action_button.text = "PAUSED [Space]"
 	action_button.custom_minimum_size = Vector2(0, 36)
 	action_button.add_theme_font_size_override("font_size", 14)
+	action_button.focus_mode = Control.FOCUS_NONE  # prevent Space key double-toggle
 
 	action_button.pressed.connect(_on_action_pressed)
 	vbox.add_child(action_button)

@@ -2,13 +2,13 @@ class_name Order
 extends RefCounted
 
 enum Type { MOVE, ATTACK, DEFEND, WITHDRAW, HOLD, PATROL, AMBUSH }
-enum Status { FORMULATING, PREPARING, EXECUTING, COMPLETE, COUNTERMANDED }
+enum Status { TRANSMITTING, PLANNING, EXECUTING, COMPLETE, COUNTERMANDED }
 enum Posture { FAST, NORMAL, CAUTIOUS }
 enum ROE { HOLD_FIRE, RETURN_FIRE, FIRE_AT_WILL, HALT_AND_ENGAGE }
 enum Pursuit { HOLD, SHADOW, PRESS }
 
 var type: Type
-var status: Status = Status.FORMULATING
+var status: Status = Status.TRANSMITTING
 
 # Waypoints: array of {hex: Vector2i, posture: Posture, roe: ROE, pursuit: Pursuit}
 var waypoints: Array[Dictionary] = []
@@ -180,8 +180,8 @@ static func type_from_string(s: String) -> Type:
 
 func status_string() -> String:
 	match status:
-		Status.FORMULATING: return "FORMULATING"
-		Status.PREPARING: return "PREPARING"
+		Status.TRANSMITTING: return "TRANSMITTING"
+		Status.PLANNING: return "PLANNING"
 		Status.EXECUTING: return "EXECUTING"
 		Status.COMPLETE: return "COMPLETE"
 		Status.COUNTERMANDED: return "COUNTERMANDED"
@@ -201,11 +201,11 @@ func update(current_time: float) -> void:
 	var elapsed := current_time - issued_at
 
 	match status:
-		Status.FORMULATING:
+		Status.TRANSMITTING:
 			if elapsed >= formulation_time:
-				status = Status.PREPARING
+				status = Status.PLANNING
 				formulated_at = issued_at + formulation_time
-		Status.PREPARING:
+		Status.PLANNING:
 			if elapsed >= total_delay():
 				status = Status.EXECUTING
 				prepared_at = issued_at + total_delay()

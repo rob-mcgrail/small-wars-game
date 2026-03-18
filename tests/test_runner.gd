@@ -162,9 +162,9 @@ func _test_order() -> void:
 	timed.formulation_time = 10.0
 	timed.preparation_time = 5.0
 	timed.add_waypoint(Vector2i(1, 1), Order.Posture.NORMAL)
-	assert_eq(timed.status, Order.Status.FORMULATING, "starts formulating")
+	assert_eq(timed.status, Order.Status.TRANSMITTING, "starts formulating")
 	timed.update(10.0)
-	assert_eq(timed.status, Order.Status.PREPARING, "preparing after formulation")
+	assert_eq(timed.status, Order.Status.PLANNING, "preparing after formulation")
 	timed.update(15.0)
 	assert_eq(timed.status, Order.Status.EXECUTING, "executing after preparation")
 

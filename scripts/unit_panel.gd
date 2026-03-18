@@ -506,9 +506,9 @@ func show_unit(unit: Dictionary, utype: Dictionary, order: Order = null, game_ti
 	elif order != null:
 		var order_color := Color(0.82, 0.84, 0.78)
 		match order.status:
-			Order.Status.FORMULATING:
+			Order.Status.TRANSMITTING:
 				order_color = Color(0.85, 0.6, 0.2)
-			Order.Status.PREPARING:
+			Order.Status.PLANNING:
 				order_color = Color(0.85, 0.85, 0.2)
 			Order.Status.EXECUTING:
 				order_color = Color(0.3, 0.85, 0.3)

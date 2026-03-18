@@ -58,8 +58,8 @@ func issue_order(unit: Dictionary, unit_type: Dictionary, order_type: Order.Type
 	# Check if there's an existing order we can add a waypoint to
 	if unit_name in active_orders:
 		var existing: Order = active_orders[unit_name]
-		if existing.status == Order.Status.FORMULATING or \
-				existing.status == Order.Status.PREPARING:
+		if existing.status == Order.Status.TRANSMITTING or \
+				existing.status == Order.Status.PLANNING:
 			existing.add_waypoint(target, posture, roe, pursuit)
 			_log("%s: waypoint %d added (%s)" % [
 				unit_name, existing.waypoint_count(),
