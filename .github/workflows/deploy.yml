@@ -1,0 +1,124 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Godot
+        run: |
+          wget -q https://github.com/godotengine/godot/releases/download/4.6.1-stable/Godot_v4.6.1-stable_linux.x86_64.zip
+          unzip -q Godot_v4.6.1-stable_linux.x86_64.zip
+          mv Godot_v4.6.1-stable_linux.x86_64 /usr/local/bin/godot
+          chmod +x /usr/local/bin/godot
+
+      - name: Install Export Templates
+        run: |
+          mkdir -p ~/.local/share/godot/export_templates/4.6.1.stable
+          wget -q https://github.com/godotengine/godot/releases/download/4.6.1-stable/Godot_v4.6.1-stable_export_templates.tpz
+          unzip -q Godot_v4.6.1-stable_export_templates.tpz
+          cp templates/web_* ~/.local/share/godot/export_templates/4.6.1.stable/
+          cp templates/version.txt ~/.local/share/godot/export_templates/4.6.1.stable/
+
+      - name: Create export_presets.cfg
+        run: |
+          cat > export_presets.cfg << 'EOF'
+          [preset.0]
+          name="Web"
+          platform="Web"
+          runnable=true
+          dedicated_server=false
+          custom_features=""
+          export_filter="all_resources"
+          include_filter="*.yaml"
+          exclude_filter=""
+          export_path="build/web/index.html"
+          encryption_include_filters=""
+          encryption_exclude_filters=""
+          encrypt_pck=false
+          encrypt_directory=false
+
+          [preset.0.options]
+          custom_template/debug=""
+          custom_template/release=""
+          variant/extensions_support=false
+          variant/thread_support=false
+          vram_texture_compression/for_desktop=true
+          vram_texture_compression/for_mobile=false
+          html/export_icon=true
+          html/custom_html_shell=""
+          html/head_include=""
+          html/canvas_resize_policy=2
+          html/focus_canvas_on_start=true
+          html/experimental_virtual_keyboard=false
+          progressive_web_app/enabled=false
+          EOF
+
+      - name: Import Project
+        run: godot --headless --import 2>&1 || true
+        timeout-minutes: 2
+
+      - name: Export Web Build
+        run: |
+          mkdir -p build/web
+          godot --headless --export-release "Web" build/web/index.html
+        timeout-minutes: 5
+
+      - name: Add COOP/COEP headers
+        run: |
+          # Create a custom index.html wrapper that sets required headers
+          # GitHub Pages can't set HTTP headers, so we use a service worker
+          cat > build/web/coi-serviceworker.js << 'SWEOF'
+          if(typeof window === 'undefined') {
+            self.addEventListener("install", () => self.skipWaiting());
+            self.addEventListener("activate", e => e.waitUntil(self.clients.claim()));
+            self.addEventListener("fetch", function(e) {
+              if(e.request.cache === "only-if-cached" && e.request.mode !== "same-origin") return;
+              e.respondWith(fetch(e.request).then(function(r) {
+                if(r.status === 0) return r;
+                var headers = new Headers(r.headers);
+                headers.set("Cross-Origin-Embedder-Policy", "credentialless");
+                headers.set("Cross-Origin-Opener-Policy", "same-origin");
+                return new Response(r.body, { status: r.status, statusText: r.statusText, headers: headers });
+              }).catch(e => console.error(e)));
+            });
+          } else {
+            if(window.crossOriginIsolated !== false) return;
+            var r = window.registration || navigator.serviceWorker.register(window.document.currentScript.src);
+            if(r) { var p = r.then ? r : Promise.resolve(r); p.then(function(r) {
+              if(r.active && !navigator.serviceWorker.controller) window.location.reload();
+            }); }
+          }
+          SWEOF
+
+          # Inject the service worker script into the HTML head
+          sed -i 's|<head>|<head><script src="coi-serviceworker.js"></script>|' build/web/index.html
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/web
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
