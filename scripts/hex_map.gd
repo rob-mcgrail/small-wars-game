@@ -1394,18 +1394,24 @@ func _on_roe_changed(unit_name: String, roe: Order.ROE) -> void:
 		# Modify pending order directly - no delay
 		order.roe = roe
 	else:
-		# Issue a standing ROE change as a simple HOLD order with C2 delay
+		# Simple standing order change - initiative check first
 		for unit in units:
 			if unit.get("name", "") == unit_name:
-				var utype: Dictionary = unit_types.get(unit.get("type_code", ""), {})
-				var c2_ctx := _build_c2_context(unit)
-				var pos := Vector2i(unit["col"], unit["row"])
-				var standing := order_manager.issue_order(
-					unit, utype, Order.Type.HOLD, pos,
-					game_clock.game_time_minutes, current_posture, roe,
-					Order.Pursuit.HOLD, c2_ctx)
-				# Standing orders use minimal planning time
-				pass  # Full C2 delay applies - hold order uses hold: 0.3 planning multiplier
+				var side: String = unit.get("side", "player")
+				var c2: Dictionary = order_manager.get_c2(side)
+				var initiative: float = float(c2.get("isolated_initiative", 0.3))
+				if randf() < initiative:
+					# Initiative passed - apply immediately
+					unit["default_roe"] = Order.roe_to_string(roe)
+				else:
+					# Issue through C2 chain
+					var utype: Dictionary = unit_types.get(unit.get("type_code", ""), {})
+					var c2_ctx := _build_c2_context(unit)
+					var pos := Vector2i(unit["col"], unit["row"])
+					order_manager.issue_order(
+						unit, utype, Order.Type.HOLD, pos,
+						game_clock.game_time_minutes, current_posture, roe,
+						Order.Pursuit.HOLD, c2_ctx)
 				break
 	current_roe = roe
 	_update_info_label()
@@ -1415,20 +1421,24 @@ func _on_roe_changed(unit_name: String, roe: Order.ROE) -> void:
 func _on_pursuit_changed(unit_name: String, pursuit: Order.Pursuit) -> void:
 	var order := order_manager.get_order(unit_name)
 	if order != null and (order.status == Order.Status.TRANSMITTING or order.status == Order.Status.PLANNING):
-		# Modify pending order directly
 		order.pursuit = pursuit
 	else:
-		# Issue a standing pursuit change
 		for unit in units:
 			if unit.get("name", "") == unit_name:
-				var utype: Dictionary = unit_types.get(unit.get("type_code", ""), {})
-				var c2_ctx := _build_c2_context(unit)
-				var pos := Vector2i(unit["col"], unit["row"])
-				var standing := order_manager.issue_order(
-					unit, utype, Order.Type.HOLD, pos,
-					game_clock.game_time_minutes, current_posture, current_roe,
-					pursuit, c2_ctx)
-				pass  # Full C2 delay applies - hold order uses hold: 0.3 planning multiplier
+				var side: String = unit.get("side", "player")
+				var c2: Dictionary = order_manager.get_c2(side)
+				var initiative: float = float(c2.get("isolated_initiative", 0.3))
+				if randf() < initiative:
+					# Initiative - apply immediately (no order needed for pursuit change)
+					pass  # pursuit persists from last order waypoint
+				else:
+					var utype: Dictionary = unit_types.get(unit.get("type_code", ""), {})
+					var c2_ctx := _build_c2_context(unit)
+					var pos := Vector2i(unit["col"], unit["row"])
+					order_manager.issue_order(
+						unit, utype, Order.Type.HOLD, pos,
+						game_clock.game_time_minutes, current_posture, current_roe,
+						pursuit, c2_ctx)
 				break
 	current_pursuit = pursuit
 	_update_info_label()
