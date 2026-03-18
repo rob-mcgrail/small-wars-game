@@ -83,7 +83,13 @@ func _is_night() -> bool:
 
 func _unit_has_night_vision(unit: Dictionary) -> bool:
 	var utype: Dictionary = unit_types.get(unit.get("type_code", ""), {})
-	return utype.get("night_vision", false)
+	if utype.get("night_vision", false):
+		return true
+	# Check optics for night_vision flag
+	var optics = utype.get("optics", {})
+	if optics is Dictionary:
+		return optics.get("night_vision", false)
+	return false
 
 
 func _get_hq_accuracy_modifier(unit: Dictionary) -> float:

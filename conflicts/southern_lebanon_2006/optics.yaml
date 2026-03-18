@@ -11,15 +11,18 @@ optics:
   kornet_thermal:
     name: "Kornet thermal sight"
     range_km: 5.0
+    night_vision: true
   commander_thermal:
     name: "Commander thermal sight"
     range_km: 4.0
+    night_vision: true
   commander_sight:
     name: "Commander sight"
     range_km: 3.0
   binos_thermal:
     name: "Binoculars + thermal monocular"
     range_km: 3.0
+    night_vision: true
   binoculars:
     name: "Binoculars"
     range_km: 2.5
