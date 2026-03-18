@@ -193,11 +193,13 @@ func _apply_armor_penetration(result: Dictionary, vs_soft: int) -> void:
 		# Systems/weapon hit
 		result["weapon_disabled"] = true
 		result["vehicle_damage"] += randf_range(0.15, 0.3)
-		result["crew_killed"] += 1 if randf() < 0.3 else 0
+		if randf() < 0.3:
+			result["crew_killed"] += 1
 	else:
 		# Spalling/fragments - still dangerous
 		result["vehicle_damage"] += randf_range(0.1, 0.25)
-		result["crew_killed"] += 1 if randf() < 0.4 else 0
+		if randf() < 0.4:
+			result["crew_killed"] += 1
 
 
 func _apply_hit_zone(result: Dictionary, vs_soft: int, distance: int = 3) -> void:
