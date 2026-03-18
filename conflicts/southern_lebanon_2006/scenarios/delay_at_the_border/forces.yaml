@@ -10,6 +10,7 @@ templates:
     speed_kmh: 70
     is_hq: true
     hq_level: 1
+    default_roe: "hold fire"
     crew: 3
     training: irregular
     morale: 70
@@ -27,6 +28,7 @@ templates:
     speed_kmh: 70
     is_hq: true
     hq_level: 2
+    default_roe: "return fire"
     crew: 3
     training: irregular
     morale: 65
@@ -42,6 +44,7 @@ templates:
     icon_color: "#d4a44a"
     symbol: wheeled
     speed_kmh: 80
+    default_roe: "fire at will"
     crew: 4
     training: militia
     morale: 50
@@ -56,6 +59,7 @@ templates:
     icon_color: "#6a8a3a"
     symbol: infantry
     speed_kmh: 4
+    default_roe: "fire at will"
     crew: 2
     training: veteran
     morale: 75
@@ -70,6 +74,7 @@ templates:
     icon_color: "#5a7a3a"
     symbol: infantry
     speed_kmh: 4
+    default_roe: "fire at will"
     crew: 8
     training: irregular
     morale: 70

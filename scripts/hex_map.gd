@@ -490,10 +490,12 @@ func _spawn_scenario_unit(entry: Dictionary, default_side: String) -> Dictionary
 		"side": side,
 	}
 
-	# Set default ROE if specified
+	# Set default ROE: prefer scenario entry, then template, then "return fire"
 	var default_roe: String = str(entry.get("default_roe", ""))
-	if default_roe != "":
-		unit_dict["default_roe"] = default_roe
+	if default_roe == "":
+		var utype: Dictionary = unit_types.get(type_code, {})
+		default_roe = str(utype.get("default_roe", "return fire"))
+	unit_dict["default_roe"] = default_roe
 
 	_init_unit_ammo_and_morale(unit_dict)
 
@@ -1388,20 +1390,49 @@ func _on_posture_changed(unit_name: String, posture: Order.Posture) -> void:
 
 func _on_roe_changed(unit_name: String, roe: Order.ROE) -> void:
 	var order := order_manager.get_order(unit_name)
-	if order != null and order.status != Order.Status.EXECUTING:
+	if order != null and (order.status == Order.Status.TRANSMITTING or order.status == Order.Status.PLANNING):
+		# Modify pending order directly - no delay
 		order.roe = roe
-		current_roe = roe
-		_update_info_label()
-		queue_redraw()
+	else:
+		# Issue a standing ROE change as a simple HOLD order with C2 delay
+		for unit in units:
+			if unit.get("name", "") == unit_name:
+				var utype: Dictionary = unit_types.get(unit.get("type_code", ""), {})
+				var c2_ctx := _build_c2_context(unit)
+				var pos := Vector2i(unit["col"], unit["row"])
+				var standing := order_manager.issue_order(
+					unit, utype, Order.Type.HOLD, pos,
+					game_clock.game_time_minutes, current_posture, roe,
+					Order.Pursuit.HOLD, c2_ctx)
+				# Standing orders use minimal planning time
+				standing.preparation_time = minf(standing.preparation_time, 1.0)
+				break
+	current_roe = roe
+	_update_info_label()
+	queue_redraw()
 
 
 func _on_pursuit_changed(unit_name: String, pursuit: Order.Pursuit) -> void:
 	var order := order_manager.get_order(unit_name)
-	if order != null and order.status != Order.Status.EXECUTING:
+	if order != null and (order.status == Order.Status.TRANSMITTING or order.status == Order.Status.PLANNING):
+		# Modify pending order directly
 		order.pursuit = pursuit
-		current_pursuit = pursuit
-		_update_info_label()
-		queue_redraw()
+	else:
+		# Issue a standing pursuit change
+		for unit in units:
+			if unit.get("name", "") == unit_name:
+				var utype: Dictionary = unit_types.get(unit.get("type_code", ""), {})
+				var c2_ctx := _build_c2_context(unit)
+				var pos := Vector2i(unit["col"], unit["row"])
+				var standing := order_manager.issue_order(
+					unit, utype, Order.Type.HOLD, pos,
+					game_clock.game_time_minutes, current_posture, current_roe,
+					pursuit, c2_ctx)
+				standing.preparation_time = minf(standing.preparation_time, 1.0)
+				break
+	current_pursuit = pursuit
+	_update_info_label()
+	queue_redraw()
 
 
 func _on_order_cleared(unit_name: String) -> void:
@@ -1560,6 +1591,13 @@ func _apply_command_shock() -> void:
 func _on_time_advanced(minutes: float) -> void:
 	hq_comms.update_hq_comms(minutes)
 	order_manager.update_orders(game_clock.game_time_minutes)
+	# Apply HOLD orders immediately when they start executing (ROE/posture changes)
+	for unit in units:
+		var uname: String = unit.get("name", "")
+		var order: Order = order_manager.get_order(uname)
+		if order != null and order.type == Order.Type.HOLD and order.status == Order.Status.EXECUTING:
+			unit["default_roe"] = Order.roe_to_string(order.roe)
+			order.status = Order.Status.COMPLETE
 	movement.move_units(minutes)
 	# Resolve combat for all units and decay suppression
 	for unit in units:
