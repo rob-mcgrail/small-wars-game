@@ -13,13 +13,13 @@ satellite_range: 6
 
 # Command and control
 c2:
-  hq_transmission_base: 2
-  hq_suppressed_multiplier: 2.5
+  hq_transmission_base: 10
+  hq_suppressed_multiplier: 4.0
   hq_mobile_multiplier: 1.3
-  chain_intact_multiplier: 0.6
-  los_transmission_time: 0.5
+  chain_intact_multiplier: 0.5
+  los_transmission_time: 3
 
-  planning_base: 2
+  planning_base: 10
   planning_multiplier:
     move: 1.0
     attack: 1.3
@@ -27,14 +27,14 @@ c2:
     ambush: 2.0
     withdraw: 0.8
     hold: 0.3
-  planning_los_multiplier: 0.7
-  planning_chain_multiplier: 0.7
+  planning_los_multiplier: 0.8
+  planning_chain_multiplier: 0.5
 
-  isolated_initiative: 0.3
+  isolated_initiative: 0.2
   can_use_runners: false
   runner_minutes_per_hex: 4
   isolated_lockout_minutes: 15
-  isolated_morale_penalty: 8
+  isolated_morale_penalty: 15
 
   warm_start_multiplier: 0.3
   countermand_multiplier: 1.3
@@ -45,4 +45,4 @@ c2:
 defaults:
   training: regular
   morale: 60
-  morale_recovery_per_min: 1.5
+  morale_recovery_per_min: 1.0
