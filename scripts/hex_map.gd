@@ -152,6 +152,11 @@ const FIRE_EFFECT_DURATION := 2.0  # seconds (real time)
 var _redraw_counter: int = 0
 var _log_counter: int = 0
 
+# Terrain LOS preview (Cmd+Click on empty hex)
+var terrain_los_preview: Dictionary = {}  # Vector2i -> true
+var terrain_los_origin: Vector2i = Vector2i(-1, -1)
+const TERRAIN_LOS_RANGE: int = 6  # 3km = 6 hexes
+
 
 func _ready() -> void:
 	_load_terrain_types()
@@ -1782,6 +1787,17 @@ func _draw() -> void:
 			draw_string(label_font, ml_pos + Vector2(1, 1), ml_name, HORIZONTAL_ALIGNMENT_LEFT, -1, label_font_size, Color(0, 0, 0, 0.7))
 			draw_string(label_font, ml_pos, ml_name, HORIZONTAL_ALIGNMENT_LEFT, -1, label_font_size, Color(0.9, 0.85, 0.7, 0.8))
 
+	# Draw terrain LOS preview (Cmd+Click on empty hex)
+	if show_los and not terrain_los_preview.is_empty() and selected_unit.is_empty():
+		for col in range(min_col, max_col + 1):
+			for row in range(min_row, max_row + 1):
+				var coord := Vector2i(col, row)
+				var center : Vector2 = (hex_grid.hex_to_pixel(col, row) - camera_offset / zoom_level) * zoom_level
+				if coord in terrain_los_preview:
+					_draw_hex_filled(center, scaled_size * 0.92, Color(0.3, 0.7, 0.9, 0.15))
+				elif hex_grid.hex_distance(terrain_los_origin, coord) <= TERRAIN_LOS_RANGE:
+					_draw_hex_filled(center, scaled_size * 0.92, Color(0.9, 0.2, 0.1, 0.1))
+
 	# Draw LOS overlay when a unit is selected
 	if show_los and not selected_unit.is_empty() and not los_visible.is_empty():
 		for col in range(min_col, max_col + 1):
@@ -2303,6 +2319,7 @@ func _get_unit_at(coord: Vector2i) -> Dictionary:
 func _update_selected_unit() -> void:
 	selected_unit = _get_unit_at(selected_hex)
 	los_visible.clear()
+	terrain_los_preview.clear()  # clear terrain LOS preview when selecting
 	if not selected_unit.is_empty():
 		_calculate_los(selected_unit)
 		# Find stacked units on same hex
@@ -2312,6 +2329,36 @@ func _update_selected_unit() -> void:
 				if u.get("unit_status", "") != "DESTROYED":
 					stacked.append(u)
 		unit_panel.set_stacked_units(stacked, selected_unit.get("name", ""))
+
+
+func _show_terrain_los(screen_pos: Vector2) -> void:
+	var world_pos := screen_pos / zoom_level + camera_offset / zoom_level
+	var hex_coord: Vector2i = hex_grid.pixel_to_hex(world_pos)
+	if not hex_grid.is_valid_hex(hex_coord):
+		return
+
+	terrain_los_origin = hex_coord
+	terrain_los_preview.clear()
+	var origin_elev: int = elevation_grid[hex_coord.y][hex_coord.x]
+
+	terrain_los_preview[hex_coord] = true
+	for col in range(hex_coord.x - TERRAIN_LOS_RANGE, hex_coord.x + TERRAIN_LOS_RANGE + 1):
+		for row in range(hex_coord.y - TERRAIN_LOS_RANGE, hex_coord.y + TERRAIN_LOS_RANGE + 1):
+			if col < 0 or col >= map_cols or row < 0 or row >= map_rows:
+				continue
+			var target := Vector2i(col, row)
+			if target == hex_coord:
+				continue
+			if hex_grid.hex_distance(hex_coord, target) > TERRAIN_LOS_RANGE:
+				continue
+			if hex_grid.has_los(hex_coord, origin_elev, target):
+				terrain_los_preview[target] = true
+
+	# Clear unit selection to show terrain LOS instead
+	selected_unit = {}
+	los_visible.clear()
+	selected_hex = hex_coord
+	queue_redraw()
 
 
 func _calculate_los(unit: Dictionary) -> void:
@@ -2394,7 +2441,11 @@ func _unhandled_input(event: InputEvent) -> void:
 		var mb := event as InputEventMouseButton
 		if mb.button_index == MOUSE_BUTTON_LEFT and mb.pressed:
 			if mb.is_command_or_control_pressed():
-				_handle_move_order(mb.position)
+				if selected_unit.is_empty():
+					# No unit selected - show terrain LOS preview from this hex
+					_show_terrain_los(mb.position)
+				else:
+					_handle_move_order(mb.position)
 			else:
 				var world_pos := mb.position / zoom_level + camera_offset / zoom_level
 				var hex_coord: Vector2i = hex_grid.pixel_to_hex(world_pos)
