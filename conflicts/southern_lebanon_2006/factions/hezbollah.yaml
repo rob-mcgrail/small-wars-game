@@ -53,6 +53,10 @@ c2:
   # HQ switching time when moving between HQ coverage
   hq_switch_minutes: 10
 
+  # Command shock: ratio of subordinate suppression that transfers to HQ
+  # 0.0 = HQ doesn't care, 1.0 = HQ feels full suppression of subordinates
+  command_shock_ratio: 0.05
+
 # Default training/morale for this faction (can be overridden per unit)
 defaults:
   training: irregular

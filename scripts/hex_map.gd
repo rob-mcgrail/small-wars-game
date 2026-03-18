@@ -1170,6 +1170,8 @@ func _setup_game_flow() -> void:
 
 	movement = Movement.new(hex_grid, units, unit_types,
 		terrain_grid, terrain_types, posture_configs, order_manager, game_clock)
+	movement.combat = combat
+	movement.death_markers = death_markers
 	movement.unit_moved.connect(_on_unit_moved)
 
 	hq_comms = HQComms.new(hex_grid, units, unit_types,
@@ -1515,6 +1517,41 @@ func _update_fog_of_war() -> void:
 			last_seen_enemies.erase(pos)
 
 
+func _apply_command_shock() -> void:
+	## Propagate subordinate suppression to HQ units.
+	## When units under an HQ take fire, the HQ feels it too.
+	for unit in units:
+		var utype: Dictionary = unit_types.get(unit.get("type_code", ""), {})
+		if not utype.get("is_hq", false):
+			continue
+		if unit.get("unit_status", "") == "DESTROYED":
+			continue
+
+		var hq_name: String = unit.get("name", "")
+		var side: String = unit.get("side", "player")
+
+		# Get command shock ratio from faction C2 config
+		var c2: Dictionary = order_manager.get_c2(side)
+		var shock_ratio: float = float(c2.get("command_shock_ratio", 0.1))
+		if shock_ratio <= 0.0:
+			continue
+
+		# Sum suppression of all units assigned to this HQ
+		var total_sub_suppression: float = 0.0
+		for sub in units:
+			if sub.get("assigned_hq", "") != hq_name:
+				continue
+			if sub.get("unit_status", "") == "DESTROYED":
+				continue
+			var sub_supp: float = combat.get_suppression(sub.get("name", ""))
+			if sub_supp > 0:
+				total_sub_suppression += sub_supp
+
+		if total_sub_suppression > 0:
+			var shock_amount: float = total_sub_suppression * shock_ratio
+			combat.apply_suppression(hq_name, shock_amount)
+
+
 func _on_time_advanced(minutes: float) -> void:
 	hq_comms.update_hq_comms(minutes)
 	order_manager.update_orders(game_clock.game_time_minutes)
@@ -1523,6 +1560,8 @@ func _on_time_advanced(minutes: float) -> void:
 	for unit in units:
 		combat_resolver.resolve_unit_combat(unit, minutes)
 	combat.decay_suppression(minutes)
+	# Command shock: subordinate suppression propagates to HQ
+	_apply_command_shock()
 	# Update morale and recover for units not under fire
 	for unit in units:
 		combat_resolver.check_morale(unit)

@@ -41,6 +41,9 @@ c2:
 
   hq_switch_minutes: 8
 
+  # Command shock: IDF takes seeing their people under fire harder
+  command_shock_ratio: 0.2
+
 # Default training/morale for this faction (can be overridden per unit)
 defaults:
   training: regular

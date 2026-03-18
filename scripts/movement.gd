@@ -13,6 +13,10 @@ var posture_configs: Dictionary
 var order_manager: OrderManager
 var game_clock: GameClock
 
+# Set post-construction by hex_map
+var combat: Combat = null  # for suppression checks
+var death_markers: Dictionary = {}  # for wreck blocking
+
 
 func _init(p_hex_grid: HexGrid, p_units: Array, p_unit_types: Dictionary,
 		p_terrain_grid: Array, p_terrain_types: Dictionary,
@@ -185,6 +189,29 @@ func move_units(minutes: float) -> void:
 					break
 				# If just passing through but out of movement, stop short
 				if float(unit.get("move_accumulator", 0.0)) < 2.0:
+					unit["move_accumulator"] = 0.0
+					break
+
+			# Check for road blocking: wrecks and heavily suppressed vehicles
+			if not unit_is_infantry:
+				var road_blocked: bool = false
+				# Wreck blocking: death marker on this hex blocks vehicles
+				if next_hex in death_markers:
+					road_blocked = true
+				# Heavily suppressed vehicle blocking: can't drive through a vehicle under heavy fire
+				for other in units:
+					if other == unit:
+						continue
+					if other.get("unit_status", "") == "DESTROYED":
+						continue
+					if int(other["col"]) != next_hex.x or int(other["row"]) != next_hex.y:
+						continue
+					if combat != null:
+						var other_supp: float = combat.get_suppression(other.get("name", ""))
+						if other_supp > 40 and other.get("type_code", "") != "INF":
+							road_blocked = true
+							break
+				if road_blocked:
 					unit["move_accumulator"] = 0.0
 					break
 
