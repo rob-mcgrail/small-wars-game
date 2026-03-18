@@ -212,13 +212,20 @@ func resolve_unit_combat(unit: Dictionary, minutes: float) -> void:
 
 		# Calculate rounds fired this tick
 		var rof: float = float(w.get("rate_of_fire", 600))
+		# Single-shot weapons (ATGMs, RPGs, cannons) fire at their stated rate
+		# The ROE multiplier only applies to high-volume weapons (machine guns, rifles)
+		var effective_roe_mult: float = roe_mult
+		if rof <= 10:
+			# Low-rate weapons: ROE barely affects fire rate
+			# They fire when they have a target, period
+			effective_roe_mult = maxf(roe_mult, 0.8)
 		# Troops conserve ammo as it gets low
 		var max_ammo: int = 0
 		var w_weapons: Array = utype.get("weapons", [])
 		if wi < w_weapons.size():
 			max_ammo = int(w_weapons[wi].get("ammo", 0))
 		var conservation: float = consume_ammo_conservation(current_ammo, max_ammo)
-		var rounds_f: float = rof * roe_mult * minutes * crew_ratio * conservation
+		var rounds_f: float = rof * effective_roe_mult * minutes * crew_ratio * conservation
 		var rounds: int = int(rounds_f)
 		# Stochastic rounding for fractional rounds
 		if randf() < (rounds_f - float(rounds)):
@@ -466,12 +473,15 @@ func _handle_ambush(unit: Dictionary, order: Order, minutes: float) -> void:
 			continue
 
 		var rof: float = float(w.get("rate_of_fire", 600))
+		var effective_roe_mult: float = roe_mult
+		if rof <= 10:
+			effective_roe_mult = maxf(roe_mult, 0.8)
 		var max_ammo: int = int(w.get("ammo", 0))
 		var ammo_pct: float = float(current_ammo) / maxf(1.0, float(max_ammo))
 		var conservation: float = 1.0
 		if ammo_pct < 0.5:
 			conservation = clampf(ammo_pct / 0.5, 0.2, 1.0)
-		var rounds_f: float = rof * roe_mult * minutes * crew_ratio * conservation
+		var rounds_f: float = rof * effective_roe_mult * minutes * crew_ratio * conservation
 		var rounds: int = int(rounds_f)
 		if randf() < (rounds_f - float(rounds)):
 			rounds += 1
