@@ -107,44 +107,84 @@ victory:
   time_limit_hours: 18
 
 player_forces:
+  # Battalion HQ - rear area near Litani
   - template: hzb_bhq
     name: "Bn HQ - Deir Mimas"
     hex: [30, 5]
 
+  # North Sector - covering Litani approaches
   - template: hzb_shq
-    name: "Co HQ - Haris"
-    hex: [30, 12]
+    name: "North Sector HQ - Haris"
+    hex: [30, 10]
     assigned_hq: "Bn HQ - Deir Mimas"
 
   - template: hzb_atgm
-    name: "Kornet Team 1"
-    hex: [22, 22]
-    assigned_hq: "Co HQ - Haris"
-
-  - template: hzb_atgm
-    name: "Kornet Team 2"
-    hex: [38, 25]
-    assigned_hq: "Co HQ - Haris"
-
-  - template: hzb_atgm
-    name: "Kornet Team 3"
-    hex: [15, 18]
-    assigned_hq: "Co HQ - Haris"
+    name: "Kornet Team North"
+    hex: [28, 15]
+    assigned_hq: "North Sector HQ - Haris"
 
   - template: hzb_infantry
-    name: "Fighter Squad 1"
+    name: "Haris Fighters"
+    hex: [30, 12]
+    assigned_hq: "North Sector HQ - Haris"
+
+  # Central Sector - main defense around Bint Jbeil
+  - template: hzb_shq
+    name: "Central Sector HQ - Bint Jbeil"
     hex: [20, 20]
-    assigned_hq: "Co HQ - Haris"
+    assigned_hq: "Bn HQ - Deir Mimas"
+
+  - template: hzb_atgm
+    name: "Kornet Team Central"
+    hex: [22, 24]
+    assigned_hq: "Central Sector HQ - Bint Jbeil"
+
+  - template: hzb_atgm
+    name: "Kornet Team West"
+    hex: [15, 18]
+    assigned_hq: "Central Sector HQ - Bint Jbeil"
 
   - template: hzb_infantry
-    name: "Fighter Squad 2"
-    hex: [25, 28]
-    assigned_hq: "Co HQ - Haris"
+    name: "Bint Jbeil Fighters"
+    hex: [20, 22]
+    assigned_hq: "Central Sector HQ - Bint Jbeil"
 
   - template: hzb_infantry
-    name: "Fighter Squad 3"
-    hex: [40, 22]
-    assigned_hq: "Co HQ - Haris"
+    name: "Aita ash-Shab Fighters"
+    hex: [15, 17]
+    assigned_hq: "Central Sector HQ - Bint Jbeil"
+
+  # South Sector - forward screen facing the border
+  - template: hzb_shq
+    name: "South Sector HQ - Yaroun"
+    hex: [25, 35]
+    assigned_hq: "Bn HQ - Deir Mimas"
+
+  - template: hzb_atgm
+    name: "Kornet Team South"
+    hex: [30, 33]
+    assigned_hq: "South Sector HQ - Yaroun"
+
+  - template: hzb_infantry
+    name: "Maroun al-Ras Fighters"
+    hex: [30, 35]
+    assigned_hq: "South Sector HQ - Yaroun"
+
+  - template: hzb_infantry
+    name: "Yaroun Fighters"
+    hex: [25, 38]
+    assigned_hq: "South Sector HQ - Yaroun"
+
+  # Mobile reserve - technicals
+  - template: hzb_technical
+    name: "Technical 1"
+    hex: [25, 15]
+    assigned_hq: "North Sector HQ - Haris"
+
+  - template: hzb_technical
+    name: "Technical 2"
+    hex: [35, 20]
+    assigned_hq: "Central Sector HQ - Bint Jbeil"
 
   - template: hzb_technical
     name: "Technical 1"
