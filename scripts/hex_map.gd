@@ -1931,8 +1931,8 @@ func _draw() -> void:
 
 	# Draw map labels (town/city names)
 	if scenario_loader != null and scaled_size > 12:
-		var label_font := ThemeDB.fallback_font
-		var label_font_size := int(clampf(scaled_size * 0.25, 8, 14))
+		var ml_font := ThemeDB.fallback_font
+		var ml_font_size := int(clampf(scaled_size * 0.25, 8, 14))
 		for ml in scenario_loader.map_labels:
 			var ml_hex_arr = ml.get("hex", [])
 			if not (ml_hex_arr is Array) or ml_hex_arr.size() < 2:
@@ -1945,11 +1945,10 @@ func _draw() -> void:
 			if ml_name == "":
 				continue
 			var ml_screen: Vector2 = (hex_grid.hex_to_pixel(ml_col, ml_row) - camera_offset / zoom_level) * zoom_level
-			var text_size := label_font.get_string_size(ml_name, HORIZONTAL_ALIGNMENT_CENTER, -1, label_font_size)
+			var text_size := ml_font.get_string_size(ml_name, HORIZONTAL_ALIGNMENT_CENTER, -1, ml_font_size)
 			var ml_pos := ml_screen + Vector2(-text_size.x * 0.5, scaled_size * 0.75)
-			# Shadow
-			draw_string(label_font, ml_pos + Vector2(1, 1), ml_name, HORIZONTAL_ALIGNMENT_LEFT, -1, label_font_size, Color(0, 0, 0, 0.7))
-			draw_string(label_font, ml_pos, ml_name, HORIZONTAL_ALIGNMENT_LEFT, -1, label_font_size, Color(0.9, 0.85, 0.7, 0.8))
+			draw_string(ml_font, ml_pos + Vector2(1, 1), ml_name, HORIZONTAL_ALIGNMENT_LEFT, -1, ml_font_size, Color(0, 0, 0, 0.7))
+			draw_string(ml_font, ml_pos, ml_name, HORIZONTAL_ALIGNMENT_LEFT, -1, ml_font_size, Color(0.9, 0.85, 0.7, 0.8))
 
 	# Draw terrain LOS preview (Cmd+Click on empty hex)
 	if show_los and not terrain_los_preview.is_empty() and selected_unit.is_empty():
