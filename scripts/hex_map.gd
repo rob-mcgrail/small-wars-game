@@ -1405,7 +1405,7 @@ func _on_roe_changed(unit_name: String, roe: Order.ROE) -> void:
 					game_clock.game_time_minutes, current_posture, roe,
 					Order.Pursuit.HOLD, c2_ctx)
 				# Standing orders use minimal planning time
-				standing.preparation_time = minf(standing.preparation_time, 1.0)
+				pass  # Full C2 delay applies - hold order uses hold: 0.3 planning multiplier
 				break
 	current_roe = roe
 	_update_info_label()
@@ -1428,7 +1428,7 @@ func _on_pursuit_changed(unit_name: String, pursuit: Order.Pursuit) -> void:
 					unit, utype, Order.Type.HOLD, pos,
 					game_clock.game_time_minutes, current_posture, current_roe,
 					pursuit, c2_ctx)
-				standing.preparation_time = minf(standing.preparation_time, 1.0)
+				pass  # Full C2 delay applies - hold order uses hold: 0.3 planning multiplier
 				break
 	current_pursuit = pursuit
 	_update_info_label()
