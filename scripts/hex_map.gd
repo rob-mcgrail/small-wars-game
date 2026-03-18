@@ -2217,14 +2217,20 @@ func _draw_unit_counter(center: Vector2, hex_sz: float, utype: Dictionary, uname
 
 
 func _get_unit_at(coord: Vector2i) -> Dictionary:
-	# Prefer living units over destroyed ones
+	# Prefer living player units, then spotted enemies, then destroyed
 	var destroyed_unit: Dictionary = {}
 	for unit in units:
-		if int(unit["col"]) == coord.x and int(unit["row"]) == coord.y:
-			if unit.get("unit_status", "") == "DESTROYED":
-				destroyed_unit = unit
-			else:
-				return unit
+		if int(unit["col"]) != coord.x or int(unit["row"]) != coord.y:
+			continue
+		# Skip unspotted enemy units
+		if unit.get("side", "player") == "enemy":
+			var uname: String = unit.get("name", "")
+			if uname not in spotted_enemies:
+				continue
+		if unit.get("unit_status", "") == "DESTROYED":
+			destroyed_unit = unit
+		else:
+			return unit
 	return destroyed_unit
 
 
@@ -2284,8 +2290,12 @@ func _update_info_label() -> void:
 		if not selected_unit.is_empty():
 			var utype_code: String = selected_unit["type_code"]
 			var utype: Dictionary = unit_types.get(utype_code, {})
-			var order: Order = order_manager.get_order(selected_unit.get("name", ""))
-			var supp_val: float = combat.get_suppression(selected_unit.get("name", ""))
+			# Don't show enemy orders - only show unit stats
+			var order: Order = null
+			var supp_val: float = 0.0
+			if selected_unit.get("side", "player") == "player":
+				order = order_manager.get_order(selected_unit.get("name", ""))
+				supp_val = combat.get_suppression(selected_unit.get("name", ""))
 			unit_panel.show_unit(selected_unit, utype, order, game_clock.game_time_minutes, supp_val)
 			# Update stacked unit carousel
 			var stacked: Array = []
