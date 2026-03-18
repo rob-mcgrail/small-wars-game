@@ -178,6 +178,17 @@ static func _parse_scalar(text: String) -> Variant:
 	if text == "{}":
 		return {}
 
+	# Inline array: [value, value, ...]
+	if text.begins_with("[") and text.ends_with("]"):
+		var inner := text.substr(1, text.length() - 2).strip_edges()
+		if inner == "":
+			return []
+		var items := inner.split(",")
+		var result: Array = []
+		for item in items:
+			result.append(_parse_scalar(item.strip_edges()))
+		return result
+
 	# Remove quotes
 	if (text.begins_with("\"") and text.ends_with("\"")) or \
 	   (text.begins_with("'") and text.ends_with("'")):

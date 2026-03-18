@@ -1932,6 +1932,28 @@ func _draw() -> void:
 
 			_draw_hex_outline(center, scaled_size, outline_color)
 
+	# Draw map labels (town/city names)
+	if scenario_loader != null and scaled_size > 12:
+		var label_font := ThemeDB.fallback_font
+		var label_font_size := int(clampf(scaled_size * 0.25, 8, 14))
+		for ml in scenario_loader.map_labels:
+			var ml_hex_arr = ml.get("hex", [])
+			if not (ml_hex_arr is Array) or ml_hex_arr.size() < 2:
+				continue
+			var ml_col: int = int(ml_hex_arr[0])
+			var ml_row: int = int(ml_hex_arr[1])
+			if ml_col < min_col - 2 or ml_col > max_col + 2 or ml_row < min_row - 2 or ml_row > max_row + 2:
+				continue
+			var ml_name: String = str(ml.get("name", ""))
+			if ml_name == "":
+				continue
+			var ml_screen: Vector2 = (hex_grid.hex_to_pixel(ml_col, ml_row) - camera_offset / zoom_level) * zoom_level
+			var text_size := label_font.get_string_size(ml_name, HORIZONTAL_ALIGNMENT_CENTER, -1, label_font_size)
+			var ml_pos := ml_screen + Vector2(-text_size.x * 0.5, scaled_size * 0.75)
+			# Shadow
+			draw_string(label_font, ml_pos + Vector2(1, 1), ml_name, HORIZONTAL_ALIGNMENT_LEFT, -1, label_font_size, Color(0, 0, 0, 0.7))
+			draw_string(label_font, ml_pos, ml_name, HORIZONTAL_ALIGNMENT_LEFT, -1, label_font_size, Color(0.9, 0.85, 0.7, 0.8))
+
 	# Draw LOS overlay when a unit is selected
 	if show_los and not selected_unit.is_empty() and not los_visible.is_empty():
 		for col in range(min_col, max_col + 1):

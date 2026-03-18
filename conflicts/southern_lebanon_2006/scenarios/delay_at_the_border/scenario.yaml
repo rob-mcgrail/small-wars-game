@@ -19,6 +19,31 @@ factions:
 
 # Town support: towns/cities that provide spotting for a faction
 # spot_range in hexes (4km = 8 hexes at 500m/hex)
+# Named locations on the map
+map_labels:
+  - hex: [20, 20]
+    name: "Bint Jbeil"
+  - hex: [30, 35]
+    name: "Maroun al-Ras"
+  - hex: [15, 17]
+    name: "Aita ash-Shab"
+  - hex: [45, 20]
+    name: "Khiam"
+  - hex: [30, 10]
+    name: "Haris"
+  - hex: [10, 28]
+    name: "Aitaroun"
+  - hex: [42, 30]
+    name: "Taibe"
+  - hex: [25, 38]
+    name: "Yaroun"
+  - hex: [50, 15]
+    name: "Rab el-Thalathine"
+  - hex: [8, 38]
+    name: "Blida"
+  - hex: [30, 3]
+    name: "Deir Mimas"
+
 town_support:
   - hex: [20, 20]
     faction: player
