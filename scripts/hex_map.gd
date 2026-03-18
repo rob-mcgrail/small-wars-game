@@ -853,7 +853,7 @@ func _on_return_to_menu() -> void:
 
 
 func _update_enemy_ai() -> void:
-	## Very basic enemy AI: move unordered enemy units toward row 0 (north).
+	## IDF AI: advance north toward the Litani, reacting to contact.
 	if scenario_loader == null:
 		return
 
@@ -866,39 +866,120 @@ func _update_enemy_ai() -> void:
 	for unit in units:
 		if unit.get("side", "player") != "enemy":
 			continue
-		if unit.get("unit_status", "") in ["DESTROYED", "ROUTING"]:
+		if unit.get("unit_status", "") in ["DESTROYED", "ROUTING", "BROKEN"]:
 			continue
 
 		var uname: String = unit.get("name", "")
-		var existing_order: Order = order_manager.get_order(uname)
-		if existing_order != null and existing_order.status != Order.Status.COMPLETE:
-			continue
-
 		var utype: Dictionary = unit_types.get(unit.get("type_code", ""), {})
 		var is_hq: bool = utype.get("is_hq", false)
-
-		# Pick a target hex: advance north (toward row 0)
 		var cur_col: int = int(unit.get("col", 0))
 		var cur_row: int = int(unit.get("row", 0))
-		# Move ~8 hexes north, with slight variation to avoid stacking
-		var target_row: int = maxi(0, cur_row - 8)
-		var col_offset: int = (hash(uname) % 5) - 2  # -2 to +2 spread
-		var target_col: int = clampi(cur_col + col_offset, 0, map_cols - 1)
-		var target := Vector2i(target_col, target_row)
+		var supp: float = combat.get_suppression(uname)
 
-		# HQ units use hold fire and stay further back
-		var ai_posture := Order.Posture.NORMAL
-		var ai_roe := Order.ROE.FIRE_AT_WILL
-		var ai_pursuit := Order.Pursuit.HOLD
+		var existing_order: Order = order_manager.get_order(uname)
+
+		# If under heavy suppression, don't issue new orders - hunker down
+		if supp > 30:
+			continue
+
+		# If already has an active order that isn't complete, check if it needs changing
+		if existing_order != null and existing_order.status == Order.Status.EXECUTING:
+			# Check if we've spotted enemies - switch to halt and engage
+			var targets: Array = combat_resolver.find_targets_in_range(unit)
+			if not targets.is_empty() and existing_order.type == Order.Type.MOVE:
+				# Contact! Halt and fight
+				if not is_hq:
+					unit["default_roe"] = "halt & engage"
+			continue
+
+		if existing_order != null and existing_order.status != Order.Status.COMPLETE:
+			continue  # Order still transmitting/planning
+
+		# No active order - decide what to do
+		var targets: Array = combat_resolver.find_targets_in_range(unit)
+
 		if is_hq:
-			ai_roe = Order.ROE.HOLD_FIRE
-			target_row = maxi(0, cur_row - 4)
-			target = Vector2i(cur_col, target_row)
+			# HQ stays behind the advance, follows at distance
+			var furthest_friendly_row: int = cur_row
+			for other in units:
+				if other.get("side", "player") != "enemy":
+					continue
+				if other.get("unit_status", "") == "DESTROYED":
+					continue
+				var other_utype: Dictionary = unit_types.get(other.get("type_code", ""), {})
+				if other_utype.get("is_hq", false):
+					continue
+				var other_row: int = int(other.get("row", 999))
+				if other_row < furthest_friendly_row:
+					furthest_friendly_row = other_row
+			# Stay 5 hexes behind the furthest unit
+			var target_row: int = maxi(2, furthest_friendly_row + 5)
+			if target_row < cur_row:
+				var target := Vector2i(cur_col, target_row)
+				var c2_ctx := _build_c2_context(unit)
+				order_manager.issue_order(
+					unit, utype, Order.Type.MOVE, target,
+					game_clock.game_time_minutes, Order.Posture.CAUTIOUS,
+					Order.ROE.HOLD_FIRE, Order.Pursuit.HOLD, c2_ctx)
 
-		var c2_ctx := _build_c2_context(unit)
-		order_manager.issue_order(
-			unit, utype, Order.Type.MOVE, target,
-			game_clock.game_time_minutes, ai_posture, ai_roe, ai_pursuit, c2_ctx)
+		elif not targets.is_empty():
+			# In contact - find a good firing position
+			var best_target: Dictionary = targets[0]
+			var target_pos := Vector2i(best_target["col"], best_target["row"])
+
+			# Try to find cover near current position with LOS to target
+			var best_pos := Vector2i(cur_col, cur_row)
+			var best_score: float = -999.0
+			for dc in range(-3, 4):
+				for dr in range(-3, 4):
+					var c: int = cur_col + dc
+					var r: int = cur_row + dr
+					if c < 0 or c >= map_cols or r < 0 or r >= map_rows:
+						continue
+					var pos := Vector2i(c, r)
+					var pos_elev: int = elevation_grid[r][c]
+					if not hex_grid.has_los(pos, pos_elev, target_pos):
+						continue
+					var score: float = 0.0
+					var terrain_code: String = terrain_grid[r][c]
+					match terrain_code:
+						"W": score += 3.0
+						"T": score += 2.0
+						"R": continue
+					score += float(pos_elev) * 0.5
+					score -= float(hex_grid.hex_distance(Vector2i(cur_col, cur_row), pos)) * 0.5
+					if score > best_score:
+						best_score = score
+						best_pos = pos
+
+			var c2_ctx := _build_c2_context(unit)
+			order_manager.issue_order(
+				unit, utype, Order.Type.MOVE, best_pos,
+				game_clock.game_time_minutes, Order.Posture.NORMAL,
+				Order.ROE.HALT_AND_ENGAGE, Order.Pursuit.HOLD, c2_ctx)
+
+		else:
+			# No contact - advance north along roads where possible
+			# Long advance order toward row 0
+			var target_row: int = maxi(0, cur_row - 20)
+			var col_offset: int = (hash(uname) % 7) - 3
+			var target_col: int = clampi(cur_col + col_offset, 0, map_cols - 1)
+
+			# Prefer road hexes as destination
+			for check_row in range(target_row, cur_row):
+				var check_col: int = clampi(cur_col + col_offset, 0, map_cols - 1)
+				if check_col >= 0 and check_col < map_cols and check_row >= 0 and check_row < map_rows:
+					if terrain_grid[check_row][check_col] == "S":
+						target_row = check_row
+						target_col = check_col
+						break
+
+			var target := Vector2i(target_col, target_row)
+			var c2_ctx := _build_c2_context(unit)
+			order_manager.issue_order(
+				unit, utype, Order.Type.MOVE, target,
+				game_clock.game_time_minutes, Order.Posture.NORMAL,
+				Order.ROE.FIRE_AT_WILL, Order.Pursuit.HOLD, c2_ctx)
 
 
 func _load_display_config() -> void:
