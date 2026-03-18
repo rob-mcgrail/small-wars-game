@@ -1,9 +1,6 @@
 name: "Israel Defense Forces"
 side: enemy
 
-# OODA loop
-ooda_base_cycle_minutes: 12
-
 # Night capabilities
 night:
   spotting_modifier: 0.6
@@ -14,10 +11,35 @@ night:
 fog_of_war: satellite
 satellite_range: 6
 
-# HQ command modifiers
-hq:
-  comms_order_buff: 0.8
-  los_order_buff: 0.6
+# Command and control
+c2:
+  hq_transmission_base: 2
+  hq_suppressed_multiplier: 2.5
+  hq_mobile_multiplier: 1.3
+  chain_intact_multiplier: 0.6
+  los_transmission_time: 0.5
+
+  planning_base: 2
+  planning_multiplier:
+    move: 1.0
+    attack: 1.3
+    patrol: 1.5
+    ambush: 2.0
+    withdraw: 0.8
+    hold: 0.3
+  planning_los_multiplier: 0.7
+  planning_chain_multiplier: 0.7
+
+  isolated_initiative: 0.3
+  can_use_runners: false
+  runner_minutes_per_hex: 4
+  isolated_lockout_minutes: 15
+  isolated_morale_penalty: 8
+
+  warm_start_multiplier: 0.3
+  countermand_multiplier: 1.3
+
+  hq_switch_minutes: 8
 
 # Default training/morale for this faction (can be overridden per unit)
 defaults:

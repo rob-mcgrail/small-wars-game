@@ -1,15 +1,8 @@
 class_name OrderManager
 extends Node
 
-# Config values
-var staff_base_minutes: float = 10.0
-var staff_training_modifiers: Dictionary = {}
-var staff_countermand_penalty: float = 1.5
-var staff_warm_start_modifier: float = 0.4
-
-var unit_prep_base_minutes: float = 5.0
-var unit_prep_training_modifiers: Dictionary = {}
-var unit_prep_order_modifiers: Dictionary = {}
+## Manages orders for all units. Calculates transmission and planning delays
+## based on faction C2 configuration, HQ state, and unit situation.
 
 # Active orders per unit (keyed by unit name)
 var active_orders: Dictionary = {}  # String -> Order
@@ -17,47 +10,63 @@ var active_orders: Dictionary = {}  # String -> Order
 # Order history for display
 var order_log: Array[String] = []
 
+# Default C2 config (overridden per-faction via scenario)
+var default_c2: Dictionary = {
+	"hq_transmission_base": 5,
+	"hq_suppressed_multiplier": 3.0,
+	"hq_mobile_multiplier": 1.5,
+	"chain_intact_multiplier": 0.7,
+	"los_transmission_time": 0.5,
+	"planning_base": 3,
+	"planning_multiplier": {},
+	"planning_los_multiplier": 0.6,
+	"planning_chain_multiplier": 0.8,
+	"isolated_initiative": 0.3,
+	"can_use_runners": false,
+	"runner_minutes_per_hex": 4,
+	"isolated_lockout_minutes": 15,
+	"warm_start_multiplier": 0.4,
+	"countermand_multiplier": 1.5,
+}
 
-func _ready() -> void:
-	var cfg := Config.new()
-	cfg.load_file("res://config/game.yaml")
+# Per-side C2 configs (set by scenario loader via hex_map)
+var player_c2: Dictionary = {}
+var enemy_c2: Dictionary = {}
 
-	staff_base_minutes = cfg.get_float("staff_formulation.base_minutes", 10.0)
-	var staff_mods = cfg.get_value("staff_formulation.training_modifier", {})
-	for key in staff_mods:
-		staff_training_modifiers[key] = float(staff_mods[key])
-	staff_countermand_penalty = cfg.get_float("staff_formulation.countermand_penalty", 1.5)
-	staff_warm_start_modifier = cfg.get_float("staff_formulation.warm_start_modifier", 0.4)
 
-	unit_prep_base_minutes = cfg.get_float("unit_preparation.base_minutes", 5.0)
-	var prep_mods = cfg.get_value("unit_preparation.training_modifier", {})
-	for key in prep_mods:
-		unit_prep_training_modifiers[key] = float(prep_mods[key])
-	var order_mods = cfg.get_value("unit_preparation.order_modifier", {})
-	for key in order_mods:
-		unit_prep_order_modifiers[key] = float(order_mods[key])
+func get_c2(side: String) -> Dictionary:
+	if side == "player" and not player_c2.is_empty():
+		return player_c2
+	if side == "enemy" and not enemy_c2.is_empty():
+		return enemy_c2
+	return default_c2
 
 
 func issue_order(unit: Dictionary, unit_type: Dictionary, order_type: Order.Type,
 		target: Vector2i, current_time: float, posture: Order.Posture = Order.Posture.NORMAL,
-		roe: Order.ROE = Order.ROE.RETURN_FIRE, hq_modifier: float = 1.0,
-		pursuit: Order.Pursuit = Order.Pursuit.HOLD) -> Order:
+		roe: Order.ROE = Order.ROE.RETURN_FIRE,
+		pursuit: Order.Pursuit = Order.Pursuit.HOLD,
+		c2_context: Dictionary = {}) -> Order:
+	## Issue an order. c2_context should contain:
+	##   in_comms: bool, in_hq_los: bool, hq_suppressed: bool, hq_mobile: bool,
+	##   chain_intact: bool, distance_to_hq: int, side: String
+
 	var unit_name: String = unit.get("name", "?")
-	var training: String = str(unit_type.get("training", "regular"))
+	var side: String = c2_context.get("side", unit.get("side", "player"))
+	var c2: Dictionary = get_c2(side)
 
 	# Check if there's an existing order we can add a waypoint to
 	if unit_name in active_orders:
 		var existing: Order = active_orders[unit_name]
 		if existing.status == Order.Status.FORMULATING or \
 				existing.status == Order.Status.PREPARING:
-			# Add waypoint to existing order
 			existing.add_waypoint(target, posture, roe, pursuit)
 			_log("%s: waypoint %d added (%s)" % [
 				unit_name, existing.waypoint_count(),
 				Order.posture_to_string(posture).to_upper()])
 			return existing
 
-	# Check for warm start (same order type, not countermanding)
+	# Check for warm start or countermand
 	var countermanding := false
 	var warm_start := false
 	if unit_name in active_orders:
@@ -67,7 +76,6 @@ func issue_order(unit: Dictionary, unit_type: Dictionary, order_type: Order.Type
 			existing.status = Order.Status.COUNTERMANDED
 			_log("Order countermanded: %s" % unit_name)
 		elif existing.status == Order.Status.COMPLETE:
-			# Previous order finished - check if same type for warm start
 			if existing.type == order_type:
 				warm_start = true
 
@@ -78,27 +86,89 @@ func issue_order(unit: Dictionary, unit_type: Dictionary, order_type: Order.Type
 	order.issued_at = current_time
 	order.was_countermanded = countermanding
 
-	# Calculate staff formulation time
-	var staff_mod: float = staff_training_modifiers.get(training, 1.0)
-	order.formulation_time = staff_base_minutes * staff_mod * hq_modifier
-	if countermanding:
-		order.formulation_time *= staff_countermand_penalty
-	elif warm_start:
-		order.formulation_time *= staff_warm_start_modifier
+	# === TRANSMISSION TIME ===
+	var in_comms: bool = c2_context.get("in_comms", false)
+	var in_hq_los: bool = c2_context.get("in_hq_los", false)
+	var hq_suppressed: bool = c2_context.get("hq_suppressed", false)
+	var hq_mobile: bool = c2_context.get("hq_mobile", false)
+	var chain_intact: bool = c2_context.get("chain_intact", false)
+	var distance_to_hq: int = c2_context.get("distance_to_hq", 999)
+	var is_hq: bool = unit_type.get("is_hq", false)
 
-	# Calculate unit preparation time
-	var prep_mod: float = unit_prep_training_modifiers.get(training, 1.0)
+	var transmission: float = 0.0
+
+	if is_hq:
+		# HQ units can self-order with minimal delay
+		transmission = 0.5
+	elif in_hq_los:
+		# Direct LOS to HQ - near instant (shouting distance, hand signals)
+		transmission = float(c2.get("los_transmission_time", 0.5))
+	elif in_comms:
+		# Within radio range of HQ
+		transmission = float(c2.get("hq_transmission_base", 5))
+		if hq_suppressed:
+			transmission *= float(c2.get("hq_suppressed_multiplier", 3.0))
+		if hq_mobile:
+			transmission *= float(c2.get("hq_mobile_multiplier", 1.5))
+		if chain_intact:
+			transmission *= float(c2.get("chain_intact_multiplier", 0.7))
+	else:
+		# Isolated - no HQ contact
+		var initiative: float = float(c2.get("isolated_initiative", 0.3))
+		if randf() < initiative:
+			# Unit shows initiative - acts on order quickly
+			transmission = 2.0
+			_log("%s: using initiative (isolated)" % unit_name)
+		elif c2.get("can_use_runners", false):
+			# Send a runner to nearest HQ
+			transmission = float(distance_to_hq) * float(c2.get("runner_minutes_per_hex", 4))
+			_log("%s: sending runner to HQ (%d hexes, %.0f min)" % [
+				unit_name, distance_to_hq, transmission])
+		else:
+			# Locked out - can't receive complex orders
+			transmission = float(c2.get("isolated_lockout_minutes", 15))
+			# Low morale increases lockout
+			var cur_morale: int = int(unit.get("current_morale", 50))
+			if cur_morale < 30:
+				transmission *= 2.0
+			elif cur_morale < 50:
+				transmission *= 1.5
+			_log("%s: isolated, no runners (%.0f min lockout)" % [unit_name, transmission])
+
+	order.formulation_time = transmission
+
+	# === PLANNING TIME ===
 	var order_type_str := Order.type_to_string(order_type)
-	var order_mod: float = unit_prep_order_modifiers.get(order_type_str, 1.0)
-	order.preparation_time = unit_prep_base_minutes * prep_mod * order_mod * hq_modifier
-	if warm_start:
-		order.preparation_time *= staff_warm_start_modifier
+	var planning_mults: Dictionary = c2.get("planning_multiplier", {})
+	var type_mult: float = 1.0
+	if planning_mults is Dictionary:
+		type_mult = float(planning_mults.get(order_type_str, 1.0))
+
+	var planning: float = float(c2.get("planning_base", 3)) * type_mult
+
+	if in_hq_los:
+		planning *= float(c2.get("planning_los_multiplier", 0.6))
+	if chain_intact:
+		planning *= float(c2.get("planning_chain_multiplier", 0.8))
+
+	# Warm start / countermand modifiers
+	if countermanding:
+		planning *= float(c2.get("countermand_multiplier", 1.5))
+		transmission *= float(c2.get("countermand_multiplier", 1.5))
+		order.formulation_time = transmission
+	elif warm_start:
+		var ws: float = float(c2.get("warm_start_multiplier", 0.4))
+		planning *= ws
+		order.formulation_time *= ws
+
+	order.preparation_time = planning
 
 	active_orders[unit_name] = order
 
 	var total := order.total_delay()
-	_log("%s: %s order issued (ready in %.0f min)" % [
-		unit_name, order_type_str.to_upper(), total])
+	_log("%s: %s order (tx: %.1f min, plan: %.1f min, total: %.1f min)" % [
+		unit_name, order_type_str.to_upper(), order.formulation_time,
+		order.preparation_time, total])
 
 	return order
 
@@ -146,7 +216,7 @@ func get_order(unit_name: String) -> Order:
 
 func issue_immediate_order(unit: Dictionary, order_type: Order.Type, target: Vector2i,
 		posture: Order.Posture, roe: Order.ROE, game_time: float) -> void:
-	## Creates an order that skips staff/prep delay and starts executing immediately.
+	## Creates an order that skips delays (for break/rout/pursuit auto-orders).
 	var order := Order.new()
 	order.type = order_type
 	order.add_waypoint(target, posture, roe)

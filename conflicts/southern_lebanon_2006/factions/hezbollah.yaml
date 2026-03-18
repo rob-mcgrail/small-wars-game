@@ -1,9 +1,6 @@
 name: "Hezbollah"
 side: player
 
-# OODA loop
-ooda_base_cycle_minutes: 20
-
 # Night capabilities
 night:
   spotting_modifier: 0.3
@@ -13,10 +10,48 @@ night:
 # Fog of war: full_knowledge, satellite, approximate, total
 fog_of_war: full_knowledge
 
-# HQ command modifiers
-hq:
-  comms_order_buff: 0.7
-  los_order_buff: 0.5
+# Command and control
+c2:
+  # Transmission delay: base time for HQ to transmit an order to a unit (minutes)
+  hq_transmission_base: 3
+  # Multiplier when HQ is suppressed
+  hq_suppressed_multiplier: 3.0
+  # Multiplier when HQ is mobile
+  hq_mobile_multiplier: 1.5
+  # Multiplier when unbroken chain to top HQ exists
+  chain_intact_multiplier: 0.7
+  # Transmission time when unit is in direct LOS of HQ (minutes)
+  los_transmission_time: 0.5
+
+  # Planning delay: time for unit to plan/prepare after receiving order (minutes)
+  planning_base: 3
+  # Planning multiplier per order type
+  planning_multiplier:
+    move: 1.0
+    attack: 1.5
+    patrol: 2.0
+    ambush: 2.5
+    withdraw: 0.8
+    hold: 0.3
+  # Planning buff when in LOS of HQ
+  planning_los_multiplier: 0.6
+  # Planning buff when chain to top HQ intact
+  planning_chain_multiplier: 0.8
+
+  # Isolated unit behaviour (no HQ contact)
+  isolated_initiative: 0.5
+  can_use_runners: true
+  runner_minutes_per_hex: 4
+  isolated_lockout_minutes: 15
+  isolated_morale_penalty: 10
+
+  # Warm start: discount when issuing same order type as previous
+  warm_start_multiplier: 0.4
+  # Countermand: penalty for changing an executing order
+  countermand_multiplier: 1.5
+
+  # HQ switching time when moving between HQ coverage
+  hq_switch_minutes: 10
 
 # Default training/morale for this faction (can be overridden per unit)
 defaults:
