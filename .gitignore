@@ -2,6 +2,7 @@
 .godot/
 *.import
 export_presets.cfg
+build/
 
 # OS
 .DS_Store

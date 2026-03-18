@@ -1730,6 +1730,9 @@ func _on_time_advanced(minutes: float) -> void:
 
 
 func _write_game_log() -> void:
+	# Skip file logging on web builds - use print instead
+	if OS.get_name() == "Web":
+		return
 	var file := FileAccess.open("user://game_state.log", FileAccess.WRITE)
 	if file == null:
 		return
