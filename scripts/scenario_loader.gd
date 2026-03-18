@@ -32,6 +32,8 @@ var time_limit_hours: float = 24.0
 var overrides: Dictionary = {}  # per-scenario game setting overrides (legacy)
 var town_support: Array = []  # towns that provide spotting for factions
 var map_labels: Array = []  # named locations on the map
+var enemy_advance_hour: int = -1  # -1 = advance immediately
+var enemy_advance_minute: int = 0
 
 # Equipment data (loaded from equipment files)
 var weapons: Dictionary = {}
@@ -109,6 +111,8 @@ func _load_conflict_scenario() -> bool:
 	start_minute = cfg.get_int("start_minute", 0)
 	sunrise_hour = cfg.get_int("sunrise_hour", -1)
 	sunset_hour = cfg.get_int("sunset_hour", -1)
+	enemy_advance_hour = cfg.get_int("enemy_advance_hour", -1)
+	enemy_advance_minute = cfg.get_int("enemy_advance_minute", 0)
 
 	# Load faction files based on scenario.yaml factions field
 	var factions_dict = cfg.get_value("factions", {})

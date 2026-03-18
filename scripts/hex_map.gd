@@ -848,6 +848,12 @@ func _update_enemy_ai() -> void:
 	if scenario_loader == null:
 		return
 
+	# Don't advance until the designated time
+	if scenario_loader.enemy_advance_hour >= 0:
+		var advance_time: float = float(scenario_loader.enemy_advance_hour) * 60.0 + float(scenario_loader.enemy_advance_minute)
+		if game_clock.game_time_minutes < advance_time:
+			return
+
 	for unit in units:
 		if unit.get("side", "player") != "enemy":
 			continue

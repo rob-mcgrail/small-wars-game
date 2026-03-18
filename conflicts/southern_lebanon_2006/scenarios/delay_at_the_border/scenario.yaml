@@ -71,6 +71,10 @@ start_minute: 0
 sunrise_hour: 5
 sunset_hour: 20
 
+# Enemy AI doesn't advance until this time (gives player setup time)
+enemy_advance_hour: 18
+enemy_advance_minute: 0
+
 victory:
   primary:
     type: hold_line
