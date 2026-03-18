@@ -177,24 +177,14 @@ player_forces:
 
   # Mobile reserve - technicals
   - template: hzb_technical
-    name: "Technical 1"
+    name: "Haris Technical"
     hex: [25, 15]
     assigned_hq: "North Sector HQ - Haris"
 
   - template: hzb_technical
-    name: "Technical 2"
+    name: "Bint Jbeil Technical"
     hex: [35, 20]
     assigned_hq: "Central Sector HQ - Bint Jbeil"
-
-  - template: hzb_technical
-    name: "Technical 1"
-    hex: [28, 15]
-    assigned_hq: "Co HQ - Haris"
-
-  - template: hzb_technical
-    name: "Technical 2"
-    hex: [35, 18]
-    assigned_hq: "Co HQ - Haris"
 
 enemy_forces:
   - template: idf_shq

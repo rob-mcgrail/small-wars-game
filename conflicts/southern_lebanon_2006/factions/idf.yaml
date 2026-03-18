@@ -14,7 +14,7 @@ satellite_range: 6
 # Command and control
 c2:
   hq_transmission_base: 10
-  hq_suppressed_multiplier: 4.0
+  hq_suppressed_multiplier: 6.0
   hq_mobile_multiplier: 1.3
   chain_intact_multiplier: 0.5
   los_transmission_time: 3
