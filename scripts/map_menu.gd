@@ -190,7 +190,7 @@ func _find_scenarios_in_conflict(conflict_path: String) -> Array[Dictionary]:
 
 
 func _folder_to_display_name(folder_name: String) -> String:
-	## Convert a folder name like "southern_lebanon_2006" to "Southern Lebanon 2006".
+	## Convert a folder name like "southern_lebanon" to "Southern Lebanon 2006".
 	var parts: PackedStringArray = folder_name.split("_")
 	var display_parts: Array[String] = []
 	for part in parts:

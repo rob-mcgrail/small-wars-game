@@ -10,11 +10,11 @@ func _init() -> void:
 
 	# Load faction configs
 	var hzb_cfg := Config.new()
-	hzb_cfg.load_file("res://conflicts/southern_lebanon_2006/factions/hezbollah.yaml")
+	hzb_cfg.load_file("res://conflicts/southern_lebanon/factions/hezbollah.yaml")
 	var hzb_c2: Dictionary = hzb_cfg.get_value("c2", {})
 
 	var idf_cfg := Config.new()
-	idf_cfg.load_file("res://conflicts/southern_lebanon_2006/factions/idf.yaml")
+	idf_cfg.load_file("res://conflicts/southern_lebanon/factions/idf.yaml")
 	var idf_c2: Dictionary = idf_cfg.get_value("c2", {})
 
 	print("\n--- HEZBOLLAH C2 CONFIG ---")

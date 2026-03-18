@@ -2,7 +2,7 @@
 # Required for web builds where directory scanning doesn't work
 conflicts:
   - name: "Southern Lebanon"
-    folder: southern_lebanon_2006
+    folder: southern_lebanon
     scenarios:
       - name: "Delay at the Border"
         folder: delay_at_the_border

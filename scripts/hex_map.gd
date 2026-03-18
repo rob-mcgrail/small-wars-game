@@ -1835,69 +1835,99 @@ func _draw() -> void:
 	var max_row := mini(map_rows - 1, int(bottom_right.y / hex_height) + margin)
 
 	var scaled_size := hex_size * zoom_level
+	var draw_details := scaled_size > 12
+	var draw_labels := scaled_size > 10 and (show_elevation or show_move_cost)
+	var full_knowledge := fog_of_war_mode == "full_knowledge"
+	var fog_total := fog_of_war_mode == "total"
+	var cam_offset_scaled := camera_offset / zoom_level
+
+	# Precompute hex polygon points for the current zoom (reused for all hexes)
+	var hex_points := PackedVector2Array()
+	for i in range(6):
+		var angle := deg_to_rad(60.0 * i)
+		hex_points.append(Vector2(cos(angle), sin(angle)) * scaled_size)
+
+	# Precompute label font once
+	var label_font: Font = null
+	var label_size: int = 0
+	if draw_labels:
+		label_font = ThemeDB.fallback_font
+		label_size = int(clampf(scaled_size * 0.22, 7, 14))
 
 	for col in range(min_col, max_col + 1):
 		for row in range(min_row, max_row + 1):
-			var center : Vector2 = (hex_grid.hex_to_pixel(col, row) - camera_offset / zoom_level) * zoom_level
-			var code: String = terrain_grid[row][col]
-			var elev: int = elevation_grid[row][col] if row < elevation_grid.size() and col < elevation_grid[row].size() else 5
+			# Inline hex_to_pixel for speed
+			var px: float = col * hex_width * 0.75
+			var py: float = row * hex_height
+			if col % 2 == 1:
+				py += hex_height * 0.5
+			var center := Vector2((px - cam_offset_scaled.x) * zoom_level,
+								  (py - cam_offset_scaled.y) * zoom_level)
 
-			# Get base color from terrain type
+			var code: String = terrain_grid[row][col]
+			var elev: int = elevation_grid[row][col]
+
+			# Get base color
 			var base_color := Color(0.8, 0.8, 0.8)
 			if code in terrain_types:
 				base_color = terrain_types[code]["color"]
 
-			# Apply elevation shading (only if elevation is known)
-			var hex_coord := Vector2i(col, row)
+			# Fog of war + elevation shading (optimised for full_knowledge)
+			var is_revealed: bool
 			var shade := 0.0
-			if hex_coord in elevation_revealed:
+			if full_knowledge:
+				is_revealed = true
 				shade = lerpf(elev_min_shade, elev_max_shade, elev / 9.0)
+			else:
+				var hex_coord := Vector2i(col, row)
+				var always_known := false
+				if not fog_total:
+					always_known = code == "S" or code == "T" or code == "C" or code == "R"
+				is_revealed = always_known or hex_coord in revealed_hexes
+				if is_revealed and hex_coord in elevation_revealed:
+					shade = lerpf(elev_min_shade, elev_max_shade, elev / 9.0)
+
 			var color := Color(
 				clampf(base_color.r + shade, 0, 1),
 				clampf(base_color.g + shade, 0, 1),
 				clampf(base_color.b + shade, 0, 1)
 			)
 
-			# Fog of war: check if hex is revealed
-			var always_known := false
-			if fog_of_war_mode != "total":
-				always_known = code == "S" or code == "T" or code == "C" or code == "R"
-			var is_revealed := always_known or hex_coord in revealed_hexes
+			# Draw hex fill using precomputed points
+			var fill_points := PackedVector2Array()
+			for pt in hex_points:
+				fill_points.append(center + pt)
 
 			if is_revealed:
-				_draw_hex_filled(center, scaled_size, color)
-				_draw_hex_detail(center, scaled_size, code)
+				draw_colored_polygon(fill_points, color)
+				if draw_details:
+					_draw_hex_detail(center, scaled_size, code)
 			else:
-				_draw_hex_filled(center, scaled_size, Color(0.18, 0.2, 0.17))
+				draw_colored_polygon(fill_points, Color(0.18, 0.2, 0.17))
 
-			# Hex overlay labels (elevation, movement) - only on revealed hexes
-			if scaled_size > 10 and is_revealed:
-				var font := ThemeDB.fallback_font
-				var label_size := int(clampf(scaled_size * 0.22, 7, 14))
-				if show_elevation and hex_coord in elevation_revealed:
-					var elev_text := str(elev)
-					var text_sz := font.get_string_size(elev_text, HORIZONTAL_ALIGNMENT_CENTER, -1, label_size)
-					var elev_pos := center + Vector2(-text_sz.x * 0.5, -scaled_size * 0.35)
-					draw_string(font, elev_pos + Vector2(1, 1), elev_text, HORIZONTAL_ALIGNMENT_LEFT, -1, label_size, Color(0, 0, 0, 0.5))
-					draw_string(font, elev_pos, elev_text, HORIZONTAL_ALIGNMENT_LEFT, -1, label_size, Color(1, 1, 1, 0.6))
+			# Labels (only when toggled on)
+			if draw_labels and is_revealed:
+				if show_elevation:
+					var elev_known := full_knowledge or Vector2i(col, row) in elevation_revealed
+					if elev_known:
+						var elev_text := str(elev)
+						var text_sz := label_font.get_string_size(elev_text, HORIZONTAL_ALIGNMENT_CENTER, -1, label_size)
+						var elev_pos := center + Vector2(-text_sz.x * 0.5, -scaled_size * 0.35)
+						draw_string(label_font, elev_pos + Vector2(1, 1), elev_text, HORIZONTAL_ALIGNMENT_LEFT, -1, label_size, Color(0, 0, 0, 0.5))
+						draw_string(label_font, elev_pos, elev_text, HORIZONTAL_ALIGNMENT_LEFT, -1, label_size, Color(1, 1, 1, 0.6))
 				if show_move_cost:
 					var spd_mod: float = 1.0
 					if code in terrain_types:
 						spd_mod = float(terrain_types[code].get("speed_modifier", 1.0))
 					var spd_text := "%d%%" % int(spd_mod * 100)
-					var text_sz := font.get_string_size(spd_text, HORIZONTAL_ALIGNMENT_CENTER, -1, label_size)
+					var text_sz := label_font.get_string_size(spd_text, HORIZONTAL_ALIGNMENT_CENTER, -1, label_size)
 					var spd_pos := center + Vector2(-text_sz.x * 0.5, scaled_size * 0.45)
-					draw_string(font, spd_pos + Vector2(1, 1), spd_text, HORIZONTAL_ALIGNMENT_LEFT, -1, label_size, Color(0, 0, 0, 0.5))
-					draw_string(font, spd_pos, spd_text, HORIZONTAL_ALIGNMENT_LEFT, -1, label_size, Color(1, 1, 1, 0.6))
+					draw_string(label_font, spd_pos + Vector2(1, 1), spd_text, HORIZONTAL_ALIGNMENT_LEFT, -1, label_size, Color(0, 0, 0, 0.5))
+					draw_string(label_font, spd_pos, spd_text, HORIZONTAL_ALIGNMENT_LEFT, -1, label_size, Color(1, 1, 1, 0.6))
 
-			# Outline
-			var outline_color := Color(0.3, 0.35, 0.25, 0.4)
+			# Only draw outlines for selected/hovered hex (not every hex)
 			if Vector2i(col, row) == selected_hex:
-				outline_color = COLOR_SELECT_OUTLINE
-			elif Vector2i(col, row) == hovered_hex:
-				outline_color = COLOR_HOVER_OUTLINE
-
-			_draw_hex_outline(center, scaled_size, outline_color)
+				_draw_hex_outline(center, scaled_size, COLOR_SELECT_OUTLINE)
 
 	# Draw map labels (town/city names)
 	if scenario_loader != null and scaled_size > 12:
