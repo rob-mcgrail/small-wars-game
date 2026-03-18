@@ -2365,11 +2365,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			_clamp_camera()
 			queue_redraw()
 		else:
-			var world_pos := mm.position / zoom_level + camera_offset / zoom_level
-			var hex_coord: Vector2i = hex_grid.pixel_to_hex(world_pos)
-			if hex_coord != hovered_hex:
-				hovered_hex = hex_coord if hex_grid.is_valid_hex(hex_coord) else Vector2i(-1, -1)
-				queue_redraw()
+			pass  # Hover highlight removed for performance
 
 	elif event is InputEventKey and event.pressed:
 		var ke := event as InputEventKey
