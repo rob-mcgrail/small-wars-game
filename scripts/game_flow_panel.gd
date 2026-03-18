@@ -70,13 +70,21 @@ func _ready() -> void:
 	daynight_label.text = ""
 	vbox.add_child(daynight_label)
 
-	# Status indicator (repurposed from phase_label)
+	# Status + speed indicator
 	phase_label = Label.new()
 	phase_label.add_theme_font_size_override("font_size", 14)
 	phase_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	phase_label.text = "PAUSED"
 	phase_label.add_theme_color_override("font_color", Color(0.85, 0.7, 1.0))
 	vbox.add_child(phase_label)
+
+	var speed_label := Label.new()
+	speed_label.name = "SpeedLabel"
+	speed_label.add_theme_font_size_override("font_size", 12)
+	speed_label.add_theme_color_override("font_color", Color(0.55, 0.58, 0.5))
+	speed_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	speed_label.text = "Speed: 2x (1/2/3/4)"
+	vbox.add_child(speed_label)
 
 	# Separator
 	var sep := HSeparator.new()
@@ -164,6 +172,13 @@ func _set_button_style_purple() -> void:
 	var h := s.duplicate()
 	h.bg_color = Color(0.45, 0.2, 0.6, 0.9)
 	action_button.add_theme_stylebox_override("hover", h)
+
+
+func set_speed(speed: int) -> void:
+	var speed_names := ["", "1x Slow", "2x Normal", "3x Fast", "4x Very Fast"]
+	var label_node := panel.find_child("SpeedLabel", true, false)
+	if label_node and label_node is Label:
+		label_node.text = "Speed: %s (1/2/3/4)" % speed_names[clampi(speed, 1, 4)]
 
 
 func _on_action_pressed() -> void:

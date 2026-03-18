@@ -87,7 +87,7 @@ func _ready() -> void:
 	var anchor := Control.new()
 	anchor.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
 	anchor.offset_left = 6
-	anchor.offset_top = -480
+	anchor.offset_top = -420
 	anchor.offset_right = 300
 	anchor.offset_bottom = -44
 	anchor.grow_horizontal = Control.GROW_DIRECTION_END

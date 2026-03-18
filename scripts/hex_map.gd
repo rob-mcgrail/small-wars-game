@@ -104,6 +104,8 @@ var carousel_index: int = 0
 var context_menu: PopupMenu
 var context_menu_unit: Dictionary = {}
 var current_order_mode: Order.Type = Order.Type.MOVE  # MOVE, PATROL, or AMBUSH
+var current_speed: int = 2  # 1=slow, 2=normal, 3=fast, 4=very fast
+const SPEED_VALUES := [0.0, 4.0, 2.0, 0.5, 0.1]  # index 0 unused, 1-4 = seconds per game minute
 
 # HQ config (loaded from game.yaml)
 var hq_switching_cost: float = 15.0
@@ -1343,6 +1345,12 @@ func _on_unit_moved(unit_name: String) -> void:
 				break
 
 
+func _set_game_speed(speed: int) -> void:
+	current_speed = clampi(speed, 1, 4)
+	game_clock.seconds_per_game_minute = SPEED_VALUES[current_speed]
+	game_flow_panel.set_speed(current_speed)
+
+
 func _toggle_pause() -> void:
 	game_clock.paused = not game_clock.paused
 	game_flow_panel.set_paused(game_clock.paused)
@@ -2298,7 +2306,7 @@ func _update_info_label() -> void:
 	var roe_str := Order.roe_to_string(current_roe).to_upper()
 	var pursuit_str := Order.pursuit_to_string(current_pursuit).to_upper()
 	var mode_str := Order.type_to_string(current_order_mode).to_upper()
-	info_label.text = "%s  |  %s (1/2/3)  |  %s (QWER)  |  %s (ZXC)" % [mode_str, posture_str, roe_str, pursuit_str]
+	info_label.text = "Cmd+L: move  |  Cmd+R: attack  |  Right-click: unit menu  |  Space: pause"
 
 	# Update unit carousel
 	_build_carousel_order()
@@ -2390,38 +2398,13 @@ func _unhandled_input(event: InputEvent) -> void:
 		var ke := event as InputEventKey
 		match ke.keycode:
 			KEY_1:
-				current_posture = Order.Posture.FAST
-				_update_info_label()
-				queue_redraw()
+				_set_game_speed(1)
 			KEY_2:
-				current_posture = Order.Posture.NORMAL
-				_update_info_label()
-				queue_redraw()
+				_set_game_speed(2)
 			KEY_3:
-				current_posture = Order.Posture.CAUTIOUS
-				_update_info_label()
-				queue_redraw()
-			KEY_Q:
-				current_roe = Order.ROE.HOLD_FIRE
-				_update_info_label()
-			KEY_W:
-				current_roe = Order.ROE.RETURN_FIRE
-				_update_info_label()
-			KEY_E:
-				current_roe = Order.ROE.FIRE_AT_WILL
-				_update_info_label()
-			KEY_R:
-				current_roe = Order.ROE.HALT_AND_ENGAGE
-				_update_info_label()
-			KEY_Z:
-				current_pursuit = Order.Pursuit.HOLD
-				_update_info_label()
-			KEY_X:
-				current_pursuit = Order.Pursuit.SHADOW
-				_update_info_label()
-			KEY_C:
-				current_pursuit = Order.Pursuit.PRESS
-				_update_info_label()
+				_set_game_speed(3)
+			KEY_4:
+				_set_game_speed(4)
 			KEY_ENTER:
 				_toggle_pause()
 			KEY_SPACE:

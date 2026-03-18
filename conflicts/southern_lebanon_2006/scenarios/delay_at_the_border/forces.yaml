@@ -84,7 +84,7 @@ templates:
     name: "IDF Company HQ"
     icon_color: "#5a7aaa"
     symbol: wheeled
-    speed_kmh: 55
+    speed_kmh: 25
     is_hq: true
     hq_level: 2
     is_armored: true
@@ -102,7 +102,7 @@ templates:
     name: "Merkava Mk4"
     icon_color: "#4a6a8a"
     symbol: wheeled
-    speed_kmh: 60
+    speed_kmh: 30
     is_armored: true
     crew: 4
     training: regular
@@ -117,7 +117,7 @@ templates:
     name: "Namer APC"
     icon_color: "#5a7a9a"
     symbol: wheeled
-    speed_kmh: 55
+    speed_kmh: 25
     is_armored: true
     crew: 3
     training: regular
