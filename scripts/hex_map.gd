@@ -197,6 +197,15 @@ func _ready() -> void:
 	if scenario_loader != null and not scenario_loader.overrides.is_empty():
 		_apply_scenario_overrides(scenario_loader.overrides)
 
+	# Load faction C2 configs into order manager
+	if scenario_loader != null:
+		var player_c2 = scenario_loader.player_faction.get("c2", {})
+		if player_c2 is Dictionary and not player_c2.is_empty():
+			order_manager.player_c2 = player_c2
+		var enemy_c2 = scenario_loader.enemy_faction.get("c2", {})
+		if enemy_c2 is Dictionary and not enemy_c2.is_empty():
+			order_manager.enemy_c2 = enemy_c2
+
 	# Set fog of war mode from player faction
 	if scenario_loader != null and not scenario_loader.player_faction.is_empty():
 		fog_of_war_mode = str(scenario_loader.player_faction.get("fog_of_war", "approximate"))
@@ -417,13 +426,7 @@ func _apply_scenario_overrides(overrides: Dictionary) -> void:
 		if "enemy_range_modifier" in night_ov:
 			combat_resolver.enemy_night_range_modifier = float(night_ov["enemy_range_modifier"])
 
-	# HQ overrides (per-side)
-	var hq_ov = overrides.get("hq", {})
-	if hq_ov is Dictionary:
-		if "player_comms_order_buff" in hq_ov:
-			hq_comms.hq_comms_order_buff = float(hq_ov["player_comms_order_buff"])
-		if "player_los_order_buff" in hq_ov:
-			hq_comms.hq_los_order_buff = float(hq_ov["player_los_order_buff"])
+	# Note: HQ/C2 overrides are now handled via faction c2 config in order_manager
 
 
 func _load_scenario_forces(loader: ScenarioLoader) -> void:
@@ -879,10 +882,10 @@ func _update_enemy_ai() -> void:
 			target_row = maxi(0, cur_row - 4)
 			target = Vector2i(cur_col, target_row)
 
-		var hq_mod: float = hq_comms.get_hq_order_modifier(unit)
+		var c2_ctx := _build_c2_context(unit)
 		order_manager.issue_order(
 			unit, utype, Order.Type.MOVE, target,
-			game_clock.game_time_minutes, ai_posture, ai_roe, hq_mod, ai_pursuit)
+			game_clock.game_time_minutes, ai_posture, ai_roe, ai_pursuit, c2_ctx)
 
 
 func _load_display_config() -> void:
@@ -2516,6 +2519,66 @@ func _handle_escape() -> void:
 	queue_redraw()
 
 
+func _build_c2_context(unit: Dictionary) -> Dictionary:
+	## Build the C2 context dict for order delay calculation.
+	var side: String = unit.get("side", "player")
+	var in_comms: bool = unit.get("in_comms", false)
+	var in_hq_los: bool = unit.get("in_hq_los", false)
+
+	# Check if the assigned HQ is suppressed or mobile
+	var hq_suppressed: bool = false
+	var hq_mobile: bool = false
+	var distance_to_hq: int = 999
+	var assigned_hq_name: String = unit.get("assigned_hq", "")
+	if assigned_hq_name != "":
+		for other in units:
+			if other.get("name", "") == assigned_hq_name:
+				var hq_pos := Vector2i(other["col"], other["row"])
+				var unit_pos := Vector2i(unit["col"], unit["row"])
+				distance_to_hq = hex_grid.hex_distance(unit_pos, hq_pos)
+				hq_suppressed = combat.get_suppression(assigned_hq_name) > 10
+				var hq_order: Order = order_manager.get_order(assigned_hq_name)
+				hq_mobile = hq_order != null and hq_order.status == Order.Status.EXECUTING
+				break
+
+	# Check if unbroken chain to top HQ exists
+	var chain_intact: bool = false
+	if in_comms:
+		# Walk up the HQ chain
+		chain_intact = true
+		var current_hq_name: String = assigned_hq_name
+		for _i in range(5):  # max depth
+			if current_hq_name == "":
+				break
+			var found_hq: bool = false
+			for other in units:
+				if other.get("name", "") == current_hq_name:
+					found_hq = true
+					if other.get("unit_status", "") == "DESTROYED":
+						chain_intact = false
+						break
+					var parent_hq: String = other.get("assigned_hq", "")
+					if parent_hq == "":
+						break  # Reached top HQ
+					if not other.get("in_comms", false):
+						chain_intact = false
+					current_hq_name = parent_hq
+					break
+			if not found_hq:
+				chain_intact = false
+				break
+
+	return {
+		"side": side,
+		"in_comms": in_comms,
+		"in_hq_los": in_hq_los,
+		"hq_suppressed": hq_suppressed,
+		"hq_mobile": hq_mobile,
+		"chain_intact": chain_intact,
+		"distance_to_hq": distance_to_hq,
+	}
+
+
 func _handle_move_order(screen_pos: Vector2) -> void:
 	if selected_unit.is_empty():
 		return
@@ -2532,13 +2595,9 @@ func _handle_move_order(screen_pos: Vector2) -> void:
 	var utype_code: String = selected_unit["type_code"]
 	var utype: Dictionary = unit_types.get(utype_code, {})
 
-	var is_hq: bool = utype.get("is_hq", false)
-	if not is_hq and not selected_unit.get("in_comms", false):
-		return  # Can't receive orders when out of comms
 	if float(selected_unit.get("hq_switch_remaining", 0.0)) > 0:
-		return  # Switching HQ, can't receive orders
+		return  # Switching HQ, wait for connection
 
-	var hq_mod: float = hq_comms.get_hq_order_modifier(selected_unit)
 	# HQ units always default to hold fire, normal posture, no pursuit
 	var wp_posture := current_posture
 	var wp_roe := current_roe
@@ -2556,9 +2615,10 @@ func _handle_move_order(screen_pos: Vector2) -> void:
 		wp_posture = Order.Posture.CAUTIOUS
 		wp_roe = Order.ROE.HOLD_FIRE
 
+	var c2_ctx := _build_c2_context(selected_unit)
 	var order := order_manager.issue_order(
 		selected_unit, utype, order_type, target,
-		game_clock.game_time_minutes, wp_posture, wp_roe, hq_mod, wp_pursuit)
+		game_clock.game_time_minutes, wp_posture, wp_roe, wp_pursuit, c2_ctx)
 
 	_update_info_label()
 	queue_redraw()
@@ -2573,9 +2633,6 @@ func _handle_attack_order(screen_pos: Vector2) -> void:
 		return
 	var utype_code: String = selected_unit["type_code"]
 	var utype: Dictionary = unit_types.get(utype_code, {})
-	var is_hq: bool = utype.get("is_hq", false)
-	if not is_hq and not selected_unit.get("in_comms", false):
-		return
 	if float(selected_unit.get("hq_switch_remaining", 0.0)) > 0:
 		return
 
@@ -2584,11 +2641,11 @@ func _handle_attack_order(screen_pos: Vector2) -> void:
 	if firing_pos == Vector2i(-1, -1):
 		return  # No valid position found
 
-	var hq_mod: float = hq_comms.get_hq_order_modifier(selected_unit)
+	var c2_ctx := _build_c2_context(selected_unit)
 	var order := order_manager.issue_order(
 		selected_unit, utype, Order.Type.ATTACK, firing_pos,
 		game_clock.game_time_minutes, current_posture, Order.ROE.HALT_AND_ENGAGE,
-		hq_mod, current_pursuit)
+		current_pursuit, c2_ctx)
 	order.attack_target = target
 	_update_info_label()
 	queue_redraw()

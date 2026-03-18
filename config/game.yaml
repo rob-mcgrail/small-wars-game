@@ -34,9 +34,8 @@ night:
   accuracy_modifier: 0.4
   effective_range_modifier: 0.5
 
-# Order delays (in minutes of game time)
-# Total delay = staff formulation + unit preparation
-# Orders are not acted on until both delays have elapsed
+# Legacy order delays (sandbox mode only - scenarios use faction c2 configs)
+# Kept as fallback defaults
 
 staff_formulation:
   # Base time for HQ staff to process an order into executable form
