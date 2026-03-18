@@ -4,7 +4,7 @@
 
 [application]
 
-config/name="Wargame"
+config/name="Small Wars Game"
 run/main_scene="res://scenes/main.tscn"
 config/features=PackedStringArray("4.4")
 
