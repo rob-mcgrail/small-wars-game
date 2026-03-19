@@ -108,15 +108,8 @@ jobs:
           }
           SWEOF
 
-          # Inject the service worker script and cache-busting meta tags into the HTML head
-          CACHE_BUST=$(date +%s)
-          sed -i "s|<head>|<head><script src=\"coi-serviceworker.js\"></script><meta http-equiv=\"Cache-Control\" content=\"no-cache, no-store, must-revalidate\"><meta http-equiv=\"Pragma\" content=\"no-cache\"><meta http-equiv=\"Expires\" content=\"0\">|" build/web/index.html
-
-          # Rename .wasm and .pck with cache-busting hash and update references
-          mv build/web/index.wasm "build/web/index.${CACHE_BUST}.wasm"
-          mv build/web/index.pck "build/web/index.${CACHE_BUST}.pck"
-          sed -i "s|index.wasm|index.${CACHE_BUST}.wasm|g" build/web/index.js
-          sed -i "s|index.pck|index.${CACHE_BUST}.pck|g" build/web/index.js
+          # Inject the service worker script into the HTML head
+          sed -i 's|<head>|<head><script src="coi-serviceworker.js"></script>|' build/web/index.html
 
       - name: Setup Pages
         uses: actions/configure-pages@v4
